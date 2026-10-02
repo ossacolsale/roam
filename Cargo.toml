@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/roam-core",
+    "crates/roam-networkmanager",
+    "crates/roamd",
+    "crates/roam-ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.83"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "io-util", "sync", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_json = "1"
+dirs = "6"
+toml = "0.8"
+zbus = "5"
+roam-core = { path = "crates/roam-core" }
+roam-networkmanager = { path = "crates/roam-networkmanager" }

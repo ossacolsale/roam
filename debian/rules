@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --workspace
+
+override_dh_auto_clean:
+	cargo clean
+
+override_dh_auto_install:
+	install -D -m755 target/release/roamd debian/tmp/usr/bin/roamd
+	install -D -m755 target/release/roam-ui debian/tmp/usr/bin/roam-ui
+	install -D -m644 systemd/roam.service debian/tmp/usr/lib/systemd/user/roam.service
+	install -D -m644 packaging/org.roam.WifiRoaming.desktop debian/tmp/usr/share/applications/org.roam.WifiRoaming.desktop
+	install -D -m644 README.md debian/tmp/usr/share/doc/roam/README.md

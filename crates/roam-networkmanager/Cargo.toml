@@ -1,0 +1,12 @@
+[package]
+name = "roam-networkmanager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+roam-core.workspace = true
+zbus = { workspace = true, features = ["blocking"] }
+zvariant = "5"
+

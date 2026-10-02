@@ -1,0 +1,14 @@
+Source: roam
+Section: net
+Priority: optional
+Maintainer: Roam contributors <maintainers@example.invalid>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, libgtk-4-dev, libadwaita-1-dev, pkg-config
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: roam
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, network-manager, systemd
+Description: local Wi-Fi roaming assistant
+ A small GTK desktop application and user service that roams among
+ user-selected saved NetworkManager Wi-Fi profiles.

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Roam
+Comment=Automatically move between your selected Wi-Fi networks
+Exec=roam-ui
+Icon=network-wireless
+Terminal=false
+Categories=GTK;Network;Utility;
+StartupNotify=true

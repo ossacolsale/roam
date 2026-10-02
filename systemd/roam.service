@@ -1,0 +1,16 @@
+[Unit]
+Description=Roam Wi-Fi roaming assistant
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/roamd
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

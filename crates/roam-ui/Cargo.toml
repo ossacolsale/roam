@@ -1,0 +1,12 @@
+[package]
+name = "roam-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11" }
+adw = { package = "libadwaita", version = "0.9" }
+glib = "0.22"
+roam-core.workspace = true
+serde_json.workspace = true
