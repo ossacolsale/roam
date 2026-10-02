@@ -8,7 +8,7 @@ Rules-Requires-Root: no
 
 Package: roam
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, network-manager, systemd
+Depends: ${shlibs:Depends}, ${misc:Depends}, init-system-helpers (>= 1.66~), network-manager, systemd
 Description: local Wi-Fi roaming assistant
  A small GTK desktop application and user service that roams among
  user-selected saved NetworkManager Wi-Fi profiles.

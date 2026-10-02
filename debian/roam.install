@@ -1,0 +1,4 @@
+target/release/roamd usr/bin
+target/release/roam-ui usr/bin
+systemd/roam.service usr/lib/systemd/user
+packaging/org.roam.WifiRoaming.desktop usr/share/applications
