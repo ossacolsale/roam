@@ -1,23 +1,55 @@
 use anyhow::{Context, Result};
-use roam_core::{Candidate, Config, CurrentConnection, Decision, Engine, EngineState, IpcRequest, IpcResponse, NetworkStatus, Snapshot, Status};
+use roam_core::{
+    Candidate, Config, CurrentConnection, Decision, Engine, EngineState, IpcRequest, IpcResponse,
+    NetworkStatus, Snapshot, Status,
+};
 use roam_networkmanager::{NetworkManager, WifiBackend};
-use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::UnixListener, sync::{mpsc, oneshot, RwLock}, time::{self, Duration}};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::UnixListener,
+    sync::{mpsc, oneshot, RwLock},
+    time::{self, Duration},
+};
 use tracing::{info, warn};
 
-enum Command { Configure(Config, oneshot::Sender<Result<()>>), Confirm(bool, oneshot::Sender<Result<()>>) }
+enum Command {
+    Configure(Config, oneshot::Sender<Result<()>>),
+    Confirm(bool, oneshot::Sender<Result<()>>),
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_env_filter("info").with_target(false).init();
+    tracing_subscriber::fmt()
+        .with_env_filter("info")
+        .with_target(false)
+        .init();
     let mut config = load_config()?;
     let mut engine = Engine::new(config.clone());
     let backend = Arc::new(tokio::task::spawn_blocking(NetworkManager::system).await??);
     let socket = socket_path()?;
-    if socket.exists() { fs::remove_file(&socket).context("remove stale local socket")?; }
+    if socket.exists() {
+        fs::remove_file(&socket).context("remove stale local socket")?;
+    }
     let listener = UnixListener::bind(&socket).context("create local Roam IPC socket")?;
-    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).context("restrict local socket permissions")?;
-    let initial = Arc::new(RwLock::new(Status { monitoring: true, state: "Searching".into(), mode: config.mode, responsiveness: config.responsiveness, current: None, candidate: None, eligible: vec![], error: None }));
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
+        .context("restrict local socket permissions")?;
+    let initial = Arc::new(RwLock::new(Status {
+        monitoring: true,
+        state: "Searching".into(),
+        mode: config.mode,
+        responsiveness: config.responsiveness,
+        current: None,
+        candidate: None,
+        eligible: vec![],
+        error: None,
+    }));
     let (tx, mut rx) = mpsc::channel::<Command>(16);
     tokio::spawn(serve(listener, tx, initial.clone()));
     info!("roaming service started");
@@ -25,8 +57,8 @@ async fn main() -> Result<()> {
     let mut ticker = time::interval(Duration::from_secs(5));
     let mut current_candidate = None;
     let mut activation: Option<(String, String, u64)> = None;
-    let mut last_scan=0u64;
-    let mut activation_error: Option<String>=None;
+    let mut last_scan = 0u64;
+    let mut activation_error: Option<String> = None;
     loop {
         tokio::select! {
             _ = ticker.tick() => {
@@ -86,7 +118,7 @@ async fn main() -> Result<()> {
                 }
                 Some(Command::Confirm(switch, reply)) => {
                     let pending = current_candidate.take();
-                    let result = if let Some((candidate,_))=pending.as_ref() {
+                    let result = if pending.is_some() {
                         if !switch {engine.ignore_pending(unix_now());Ok(())}
                         else if let Some(confirmed)=engine.confirm(true,unix_now()) {
                             let target=confirmed.clone();let backend=backend.clone();
@@ -107,62 +139,226 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn evaluate_once(backend: &NetworkManager, engine: &mut Engine, config: &Config) -> Result<(Status, Decision, Option<roam_networkmanager::WifiDevice>, Vec<roam_networkmanager::ApDetails>, Vec<roam_networkmanager::ProfileDetails>, Option<CurrentConnection>)> {
+fn evaluate_once(
+    backend: &NetworkManager,
+    engine: &mut Engine,
+    config: &Config,
+) -> Result<(
+    Status,
+    Decision,
+    Option<roam_networkmanager::WifiDevice>,
+    Vec<roam_networkmanager::ApDetails>,
+    Vec<roam_networkmanager::ProfileDetails>,
+    Option<CurrentConnection>,
+)> {
     let devices = backend.wifi_devices()?;
     let profiles = backend.saved_networks()?;
     let device = devices.first().cloned();
     let now = unix_now();
-    let (current, aps) = if let Some(ref d) = device { (backend.current_connection(d,&profiles)?, backend.access_points(d,&profiles,now)?) } else { (None,vec![]) };
-    let snapshot = Snapshot { now, current: current.clone(), access_points: aps.iter().map(|a|a.core.clone()).collect() };
+    let (current, aps) = if let Some(ref d) = device {
+        (
+            backend.current_connection(d, &profiles)?,
+            backend.access_points(d, &profiles, now)?,
+        )
+    } else {
+        (None, vec![])
+    };
+    let snapshot = Snapshot {
+        now,
+        current: current.clone(),
+        access_points: aps.iter().map(|a| a.core.clone()).collect(),
+    };
     let decision = engine.evaluate(&snapshot);
-    let current_status = current.as_ref().and_then(|c| profiles.iter().find(|p| p.core.profile_uuid == c.profile_uuid).map(|p| NetworkStatus { profile_uuid: c.profile_uuid.clone(), name: network_name(&p.core.ssid,&p.core.id), signal: c.signal.map(|v|v.clamp(0.0,100.0) as u8), eligible:config.is_eligible(&c.profile_uuid),available:true }));
-    let mut eligible: Vec<NetworkStatus> = profiles.iter().map(|p| NetworkStatus { profile_uuid: p.core.profile_uuid.clone(), name:network_name(&p.core.ssid,&p.core.id), signal:None, eligible:config.is_eligible(&p.core.profile_uuid),available:true }).collect();
-    eligible.extend(config.eligible_profiles.iter().filter(|id|!profiles.iter().any(|p|&p.core.profile_uuid==*id)).map(|id|NetworkStatus{profile_uuid:id.clone(),name:id.clone(),signal:None,eligible:true,available:false}));
-    let status=Status { monitoring:true,state:state_name(engine.state()).into(),mode:config.mode,responsiveness:config.responsiveness,current:current_status,candidate:None,eligible,error:None };
-    Ok((status,decision,device,aps,profiles,current))
+    let current_status = current.as_ref().and_then(|c| {
+        profiles
+            .iter()
+            .find(|p| p.core.profile_uuid == c.profile_uuid)
+            .map(|p| NetworkStatus {
+                profile_uuid: c.profile_uuid.clone(),
+                name: network_name(&p.core.ssid, &p.core.id),
+                signal: c.signal.map(|v| v.clamp(0.0, 100.0) as u8),
+                eligible: config.is_eligible(&c.profile_uuid),
+                available: true,
+            })
+    });
+    let mut eligible: Vec<NetworkStatus> = profiles
+        .iter()
+        .map(|p| NetworkStatus {
+            profile_uuid: p.core.profile_uuid.clone(),
+            name: network_name(&p.core.ssid, &p.core.id),
+            signal: None,
+            eligible: config.is_eligible(&p.core.profile_uuid),
+            available: true,
+        })
+        .collect();
+    eligible.extend(
+        config
+            .eligible_profiles
+            .iter()
+            .filter(|id| !profiles.iter().any(|p| &p.core.profile_uuid == *id))
+            .map(|id| NetworkStatus {
+                profile_uuid: id.clone(),
+                name: id.clone(),
+                signal: None,
+                eligible: true,
+                available: false,
+            }),
+    );
+    let status = Status {
+        monitoring: true,
+        state: state_name(engine.state()).into(),
+        mode: config.mode,
+        responsiveness: config.responsiveness,
+        current: current_status,
+        candidate: None,
+        eligible,
+        error: None,
+    };
+    Ok((status, decision, device, aps, profiles, current))
 }
 
-fn activate_candidate(backend:&NetworkManager,candidate:&Candidate)->Result<()> {
-    let devices=backend.wifi_devices()?;
-    let profiles=backend.saved_networks()?;
-    let device=devices.first().ok_or_else(||anyhow::anyhow!("no Wi-Fi device is available"))?;
-    let profile=profiles.iter().find(|p|p.core.profile_uuid==candidate.profile_uuid).ok_or_else(||anyhow::anyhow!("saved profile is unavailable"))?;
-    let aps=backend.access_points(device,&profiles,unix_now())?;
-    let ap=aps.iter().find(|a|a.core.profile_uuid.as_deref()==Some(candidate.profile_uuid.as_str()) && a.core.bssid==candidate.bssid).ok_or_else(||anyhow::anyhow!("candidate access point is no longer visible"))?;
-    backend.activate(profile,device,Some(ap))
+fn activate_candidate(backend: &NetworkManager, candidate: &Candidate) -> Result<()> {
+    let devices = backend.wifi_devices()?;
+    let profiles = backend.saved_networks()?;
+    let device = devices
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no Wi-Fi device is available"))?;
+    let profile = profiles
+        .iter()
+        .find(|p| p.core.profile_uuid == candidate.profile_uuid)
+        .ok_or_else(|| anyhow::anyhow!("saved profile is unavailable"))?;
+    let aps = backend.access_points(device, &profiles, unix_now())?;
+    let ap = aps
+        .iter()
+        .find(|a| {
+            a.core.profile_uuid.as_deref() == Some(candidate.profile_uuid.as_str())
+                && a.core.bssid == candidate.bssid
+        })
+        .ok_or_else(|| anyhow::anyhow!("candidate access point is no longer visible"))?;
+    backend.activate(profile, device, Some(ap))
 }
 
 async fn serve(listener: UnixListener, tx: mpsc::Sender<Command>, status: Arc<RwLock<Status>>) {
     loop {
-        let Ok((stream,_)) = listener.accept().await else { continue };
-        let tx=tx.clone(); let status=status.clone();
+        let Ok((stream, _)) = listener.accept().await else {
+            continue;
+        };
+        let tx = tx.clone();
+        let status = status.clone();
         tokio::spawn(async move {
-            let (read,mut write)=stream.into_split(); let mut line=String::new(); let mut reader=BufReader::new(read);
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            let mut reader = BufReader::new(read);
             let response = if reader.read_line(&mut line).await.is_ok() {
                 match serde_json::from_str::<IpcRequest>(&line) {
-                    Ok(IpcRequest::Status) => IpcResponse::Status { status: status.read().await.clone() },
-                    Ok(IpcRequest::Configure{config}) => { let (reply,rx)=oneshot::channel(); if tx.send(Command::Configure(config,reply)).await.is_ok() { match rx.await { Ok(Ok(()))=>IpcResponse::Ok, Ok(Err(e))=>IpcResponse::Error{message:e.to_string()},_=>IpcResponse::Error{message:"service unavailable".into()} } } else { IpcResponse::Error{message:"service unavailable".into()} } },
-                    Ok(IpcRequest::Confirm{switch}) => { let (reply,rx)=oneshot::channel(); if tx.send(Command::Confirm(switch,reply)).await.is_ok() { match rx.await { Ok(Ok(()))=>IpcResponse::Ok, Ok(Err(e))=>IpcResponse::Error{message:e.to_string()},_=>IpcResponse::Error{message:"service unavailable".into()} } } else { IpcResponse::Error{message:"service unavailable".into()} } },
-                    Err(_) => IpcResponse::Error { message:"invalid local request".into() },
+                    Ok(IpcRequest::Status) => IpcResponse::Status {
+                        status: status.read().await.clone(),
+                    },
+                    Ok(IpcRequest::Configure { config }) => {
+                        let (reply, rx) = oneshot::channel();
+                        if tx.send(Command::Configure(config, reply)).await.is_ok() {
+                            match rx.await {
+                                Ok(Ok(())) => IpcResponse::Ok,
+                                Ok(Err(e)) => IpcResponse::Error {
+                                    message: e.to_string(),
+                                },
+                                _ => IpcResponse::Error {
+                                    message: "service unavailable".into(),
+                                },
+                            }
+                        } else {
+                            IpcResponse::Error {
+                                message: "service unavailable".into(),
+                            }
+                        }
+                    }
+                    Ok(IpcRequest::Confirm { switch }) => {
+                        let (reply, rx) = oneshot::channel();
+                        if tx.send(Command::Confirm(switch, reply)).await.is_ok() {
+                            match rx.await {
+                                Ok(Ok(())) => IpcResponse::Ok,
+                                Ok(Err(e)) => IpcResponse::Error {
+                                    message: e.to_string(),
+                                },
+                                _ => IpcResponse::Error {
+                                    message: "service unavailable".into(),
+                                },
+                            }
+                        } else {
+                            IpcResponse::Error {
+                                message: "service unavailable".into(),
+                            }
+                        }
+                    }
+                    Err(_) => IpcResponse::Error {
+                        message: "invalid local request".into(),
+                    },
                 }
-            } else { IpcResponse::Error { message:"empty local request".into() } };
-            if let Ok(mut json)=serde_json::to_vec(&response) { json.push(b'\n'); let _=write.write_all(&json).await; }
+            } else {
+                IpcResponse::Error {
+                    message: "empty local request".into(),
+                }
+            };
+            if let Ok(mut json) = serde_json::to_vec(&response) {
+                json.push(b'\n');
+                let _ = write.write_all(&json).await;
+            }
         });
     }
 }
 
 fn load_config() -> Result<Config> {
-    let path=config_path()?;
-    if !path.exists(){let config=Config::default();save_config(&config)?;return Ok(config)}
-    let data=fs::read_to_string(path)?;
+    let path = config_path()?;
+    if !path.exists() {
+        let config = Config::default();
+        save_config(&config)?;
+        return Ok(config);
+    }
+    let data = fs::read_to_string(path)?;
     Ok(toml::from_str(&data).context("parse Roam configuration")?)
 }
-fn save_config(config:&Config)->Result<()> {
-    let path=config_path()?; if let Some(parent)=path.parent(){fs::create_dir_all(parent)?; fs::set_permissions(parent,fs::Permissions::from_mode(0o700))?;}
-    let data=toml::to_string(config)?; fs::write(&path,data)?; fs::set_permissions(path,fs::Permissions::from_mode(0o600))?; Ok(())
+fn save_config(config: &Config) -> Result<()> {
+    let path = config_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    }
+    let data = toml::to_string(config)?;
+    fs::write(&path, data)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
 }
-fn config_path()->Result<PathBuf>{let base=dirs::config_dir().context("find XDG config directory")?;Ok(base.join("roam/config.toml"))}
-fn socket_path()->Result<PathBuf>{let base=std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).context("XDG_RUNTIME_DIR is not set")?;Ok(base.join("roam.sock"))}
-fn unix_now()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()}
-fn state_name(state:EngineState)->&'static str{match state{EngineState::Stable=>"Monitoring",EngineState::Degrading=>"Weak",EngineState::Seeking=>"Searching",EngineState::CandidateFound=>"Searching",EngineState::AwaitingConfirmation=>"Confirm",EngineState::Roaming=>"Switching",EngineState::Cooldown=>"Monitoring"}}
-fn network_name(ssid:&[u8],profile_id:&str)->String{if ssid.is_empty(){profile_id.to_owned()}else{String::from_utf8_lossy(ssid).into_owned()}}
+fn config_path() -> Result<PathBuf> {
+    let base = dirs::config_dir().context("find XDG config directory")?;
+    Ok(base.join("roam/config.toml"))
+}
+fn socket_path() -> Result<PathBuf> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .context("XDG_RUNTIME_DIR is not set")?;
+    Ok(base.join("roam.sock"))
+}
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+fn state_name(state: EngineState) -> &'static str {
+    match state {
+        EngineState::Stable => "Monitoring",
+        EngineState::Degrading => "Weak",
+        EngineState::Seeking => "Searching",
+        EngineState::CandidateFound => "Searching",
+        EngineState::AwaitingConfirmation => "Confirm",
+        EngineState::Roaming => "Switching",
+        EngineState::Cooldown => "Monitoring",
+    }
+}
+fn network_name(ssid: &[u8], profile_id: &str) -> String {
+    if ssid.is_empty() {
+        profile_id.to_owned()
+    } else {
+        String::from_utf8_lossy(ssid).into_owned()
+    }
+}
