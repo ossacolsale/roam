@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.roam.WifiRoaming</id>
+  <name>Roam</name>
+  <summary>Automatic Wi-Fi roaming for Linux with NetworkManager</summary>
+  <developer id="io.github.ossacolsale"><name>Roam contributors</name></developer>
+  <description>
+    <p>Roam is a local Linux Wi-Fi roaming assistant that can automatically switch between user-selected saved NetworkManager Wi-Fi networks when the current connection becomes weak or unstable.</p>
+    <p>It works with independent access points, including different SSIDs and multiple BSSIDs under one SSID. Roam uses NetworkManager for connection changes and does not require mesh networking, Internet access, or cloud services.</p>
+  </description>
+  <launchable type="desktop-id">org.roam.WifiRoaming.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <url type="homepage">https://github.com/ossacolsale/roam</url>
+  <url type="vcs-browser">https://github.com/ossacolsale/roam</url>
+  <url type="bugtracker">https://github.com/ossacolsale/roam/issues</url>
+  <icon type="stock">org.roam.WifiRoaming</icon>
+  <provides>
+    <binary>roam-ui</binary>
+    <binary>roamd</binary>
+  </provides>
+  <categories>
+    <category>Network</category>
+    <category>Utility</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+</component>

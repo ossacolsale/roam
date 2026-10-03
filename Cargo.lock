@@ -997,6 +997,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "roam-core",
+ "tokio",
  "zbus",
  "zvariant",
 ]

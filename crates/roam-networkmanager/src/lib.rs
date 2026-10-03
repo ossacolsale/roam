@@ -81,6 +81,24 @@ impl NetworkManager {
     }
 }
 
+/// Block on NetworkManager D-Bus signals and notify the caller when its state
+/// changes. The daemon uses this as its primary wake-up source and keeps a
+/// slow timer as a recovery path for missed signals or service restarts.
+pub fn monitor_events(tx: tokio::sync::mpsc::UnboundedSender<()>) -> Result<()> {
+    let connection = Connection::system().context("connect to the system D-Bus for monitoring")?;
+    let proxy =
+        Proxy::new(&connection, NM, ROOT, NM).context("create NetworkManager signal monitor")?;
+    let signals = proxy
+        .receive_all_signals()
+        .context("subscribe to NetworkManager D-Bus signals")?;
+    for _signal in signals {
+        if tx.send(()).is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 impl WifiBackend for NetworkManager {
     fn wifi_devices(&self) -> Result<Vec<WifiDevice>> {
         let p = self.proxy(ROOT, NM)?;

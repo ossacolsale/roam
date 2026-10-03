@@ -1,36 +1,93 @@
-# Roam
+# Roam: automatic Wi-Fi roaming for Linux
 
-Roam is a small, local Linux Wi-Fi roaming assistant. The background `roamd`
-service watches NetworkManager and can activate only saved Wi-Fi profiles that
-you explicitly mark as eligible. The GTK4/libadwaita window is a separate
-client; closing it does not stop roaming.
+Roam is a local-only, privacy-first Linux application for automatic roaming
+between saved Wi-Fi networks. It watches NetworkManager and can switch between
+different SSIDs, or between access points using the same SSID, when the
+currently connected network becomes weak or unstable; you choose the saved
+profiles it may use, and no mesh network is required.
+
+If your Linux laptop stays connected to a weak saved Wi-Fi network while a
+stronger known network is nearby, Roam is designed for that situation.
+
+## The problem
+
+Linux laptops can remain connected to a Wi-Fi network after its signal becomes
+weak or unstable, even when another known network is available with a much
+better signal. This can happen in large homes, offices, warehouses, schools,
+laboratories, hotels, and other buildings with several access points or saved
+Wi-Fi networks.
+
+Roam lets you choose which saved NetworkManager Wi-Fi profiles are eligible.
+It can switch to a clearly better eligible network when the current connection
+deteriorates. It works with ordinary NetworkManager profiles and independent
+access points: no mesh networking is required. Different SSIDs and multiple
+BSSIDs under one SSID are supported.
+
+## Who is Roam for?
+
+- Linux laptop users moving between rooms or floors.
+- People working in buildings with several Wi-Fi networks or access points.
+- Users with multiple saved Wi-Fi profiles who want to choose which may be used.
+- Users whose laptop stays attached to a weak network for too long.
+- Anyone who wants automatic Wi-Fi switching without a mesh network.
+- Users looking for a local-only solution without cloud services.
+
+## What Roam is not
+
+Roam is not a mesh networking system, Wi-Fi access point, VPN, cloud monitoring
+service, password manager, or replacement for NetworkManager. NetworkManager
+continues to manage the actual Wi-Fi connection; Roam observes it and applies
+your selected roaming policy through NetworkManager.
 
 ## Install
 
-Roam requires a normal desktop session with NetworkManager, systemd user
-services, GTK4, and libadwaita. It does not support iwd-only, ConnMan, or raw
-`wpa_supplicant` installations.
+**Available now: build from source.** A Debian/Ubuntu package, Fedora-family
+RPM, Arch/AUR package, and GitHub Release downloads are planned; none have been
+published yet. The repository includes draft Debian, RPM, and Arch packaging
+definitions, but they are not published install channels.
 
-Build from source with a current stable Rust toolchain and the GTK development
-packages for your distribution. On Debian/Ubuntu install `libgtk-4-dev`,
-`libadwaita-1-dev`, `build-essential`, and `pkg-config`; Fedora uses
-`gtk4-devel`, `libadwaita-devel`, and `gcc`; Arch uses `gtk4`, `libadwaita`, and
-`base-devel`.
+Roam requires Linux, NetworkManager, systemd user services, GTK4, and
+libadwaita. It does not support iwd-only, ConnMan, or raw `wpa_supplicant`
+installations.
+
+Install build dependencies:
+
+```sh
+# Debian/Ubuntu
+sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev
+
+# Fedora
+sudo dnf install gcc pkg-config gtk4-devel libadwaita-devel
+
+# Arch Linux
+sudo pacman -S base-devel pkgconf gtk4 libadwaita
+```
+
+Build and install the applications and user service (installing binaries in
+`/usr/bin` requires administrator privileges; Roam itself still runs as your
+user):
 
 ```sh
 cargo build --release --workspace
-install -Dm755 target/release/roamd ~/.local/bin/roamd
-install -Dm755 target/release/roam-ui ~/.local/bin/roam-ui
+sudo install -Dm755 target/release/roamd /usr/bin/roamd
+sudo install -Dm755 target/release/roam-ui /usr/bin/roam-ui
 install -Dm644 systemd/roam.service ~/.config/systemd/user/roam.service
 install -Dm644 packaging/org.roam.WifiRoaming.desktop ~/.local/share/applications/org.roam.WifiRoaming.desktop
+install -Dm644 assets/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg ~/.local/share/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg
 systemctl --user daemon-reload
 systemctl --user enable --now roam.service
 ```
 
-The first launch creates `~/.config/roam/config.toml` with Automatic mode,
-Medium responsiveness, and no eligible profiles. Open Roam and select the
-saved profiles you want to use. The installation enables the user service by
-default; runtime networking does not require root.
+The first service start creates `~/.config/roam/config.toml` with Automatic
+mode, Medium responsiveness, and no eligible profiles. Open Roam and select the
+saved profiles you want it to consider. The enabled user service starts at each
+login and keeps running when the GUI closes. The service runs as your user and
+does not require the whole application to run as root. Package installs enable
+the service for user logins; launching the GUI also starts it in the current
+session if needed. Logging out stops the normal user session, and the service
+starts again at the next login. To opt out for this user, run
+`systemctl --user mask --now roam.service`; to resume, run
+`systemctl --user unmask roam.service && systemctl --user start roam.service`.
 
 ## Use
 
@@ -38,78 +95,93 @@ default; runtime networking does not require root.
   eligible access point. Confirm asks before activation.
 - **Responsiveness:** Low favors stability, Medium balances stability and
   earlier roaming, and High considers alternatives earlier.
-- **Networks eligible for roaming:** Only checked saved NetworkManager profiles
-  can be selected as candidates. Unknown access points are ignored.
+- **Eligible networks:** Only checked saved NetworkManager profiles are
+  candidates. Unknown access points are ignored.
 
-The service activates a specific visible access point through NetworkManager's
-D-Bus `ActivateConnection` call. It does not disconnect first, edit profiles,
-or read Wi-Fi secrets.
+Roam activates a specific visible access point with NetworkManager's D-Bus
+`ActivateConnection` method. It does not disconnect first, edit profiles, or
+read Wi-Fi secrets. A failed activation leaves the current connection alone.
 
-## Configuration
+## FAQ: NetworkManager Wi-Fi roaming
 
-Roam stores only its mode, responsiveness, and eligible NetworkManager profile
-UUIDs in the XDG configuration directory, normally
-`~/.config/roam/config.toml`. The file and local IPC socket are restricted to
-the logged-in user. The included example is in
-[`packaging/example-config.toml`](packaging/example-config.toml).
+### How can I automatically switch between saved Wi-Fi networks on Linux?
+
+Roam monitors the current Wi-Fi connection and can switch between saved
+NetworkManager Wi-Fi profiles selected by you when the connection becomes weak
+or unstable.
+
+### How can I automatically connect to a stronger saved Wi-Fi network on Linux?
+
+Choose which saved Wi-Fi profiles Roam may use. It can activate a significantly
+better eligible profile when the current connection deteriorates.
+
+### How do I switch between different Wi-Fi SSIDs automatically on Linux?
+
+Roam supports automatic switching between different saved NetworkManager Wi-Fi
+profiles selected by you. It also supports multiple access points under the
+same SSID.
+
+### Does Roam require Wi-Fi mesh?
+
+No. Roam works with ordinary independent access points and saved Wi-Fi
+networks.
+
+### Does Roam replace NetworkManager?
+
+No. NetworkManager remains responsible for the actual Wi-Fi connection. Roam
+adds a user-controlled roaming policy and asks NetworkManager to activate a
+selected profile.
+
+### Does Roam require Internet access?
+
+No. Roam is designed to work locally and makes no cloud or API calls.
+
+### Does Roam store Wi-Fi passwords?
+
+No. Roam uses existing NetworkManager profiles and does not persist Wi-Fi
+credentials.
+
+## Configuration and privacy
+
+Roam stores its mode, responsiveness, and eligible NetworkManager profile UUIDs
+in `~/.config/roam/config.toml`. Signal and connection observations used by
+the decision engine exist only in memory. Roam does not persist credentials,
+SSID/BSSID or signal history, location, IP/DNS history, or connection history.
+There is no telemetry, analytics, crash upload, cloud/API call, or update
+tracking. Logs omit SSIDs, BSSIDs, passwords, and network addresses.
+
+NetworkManager's standard D-Bus access point object reports signal strength as
+a percentage quality value. Roam keeps it on that scale; it is not dBm. Policy
+thresholds are internal starting points and have not been validated across real
+hardware.
 
 ## Development
 
-The workspace contains:
+The workspace contains `roam-core` (policy and deterministic tests),
+`roam-networkmanager` (direct D-Bus access), `roamd` (background user service
+and local Unix socket IPC), and `roam-ui` (GTK4/libadwaita client). The daemon
+reacts to NetworkManager D-Bus signals and uses a 30-second fallback check.
+It requests scans only while seeking candidates, with a rate limit.
 
-- `roam-core`: pure roaming policy, in-memory filtering/state, and a fake Wi-Fi
-  backend for deterministic tests;
-- `roam-networkmanager`: direct NetworkManager D-Bus objects and activation;
-- `roamd`: the background user service, config persistence, and local Unix
-  socket IPC;
-- `roam-ui`: the GTK4/libadwaita client.
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features
+cargo test --workspace
+cargo build --workspace
+```
 
-Run the policy tests with `cargo test -p roam-core`. Build all applications with
-`cargo build --workspace`. GTK and libadwaita are runtime/build dependencies of
-the UI crate; core tests do not need a Wi-Fi adapter or a running
-NetworkManager daemon.
+## Security and help
 
-## Privacy
+Roam uses the logged-in user's system D-Bus access to NetworkManager and does
+not install a privileged helper. NetworkManager and Polkit decide whether a
+requested connection activation is allowed. See [SECURITY.md](SECURITY.md) for
+vulnerability reporting and [docs/index.html](docs/index.html) for the English
+project landing page.
 
-Roam is local-only. It has no accounts, cloud calls, telemetry, analytics,
-crash uploads, or update tracking. It stores no passwords, BSSID history,
-signal history, connection history, location, IP addresses, or DNS data. Signal
-history exists only in memory for the decision engine. Logs omit SSIDs and
-BSSIDs.
+## Project links
 
-NetworkManager's standard D-Bus access point object provides signal strength
-as a percentage. Roam keeps this as a percentage quality value and never
-labels it dBm. The policy thresholds are internal starting points and should
-be tuned with real hardware before broad distribution.
-
-## Troubleshooting
-
-- **Monitoring service is not running:** Run
-  `systemctl --user status roam.service`, then
-  `systemctl --user restart roam.service`.
-- **No saved networks appear:** Confirm the Wi-Fi profiles exist in
-  NetworkManager and that the device is managed by NetworkManager.
-- **A switch is denied:** Roam makes normal user-session D-Bus requests. Your
-  NetworkManager and Polkit policy must allow the logged-in user to activate
-  saved connections. Do not run the whole application as root. If policy denies
-  activation, the current connection is left alone and the service logs a
-  generic failure without Wi-Fi identifiers.
-- **No AP candidate appears:** Confirm the profile is checked and visible.
-  NetworkManager scan results can be temporarily stale or restricted by the
-  driver; failed scans never cause a disconnect.
-
-## NetworkManager and Polkit
-
-The application talks to the system NetworkManager D-Bus service using the
-logged-in user's session credentials. Roam needs permission to enumerate
-devices/profiles, request scans, read visible AP properties, and activate an
-existing saved profile. Existing system Polkit policy normally governs the
-activation. Roam does not install a privileged helper and does not request
-passwords or secrets.
-
-## Packaging
-
-`debian/` contains a basic Debian source package definition and
-`packaging/roam.spec` provides a basic RPM spec for Fedora-family systems.
-Install-time service enabling uses the user session; the service itself runs as
-the user.
+- [Source repository](https://github.com/ossacolsale/roam)
+- [Releases and downloads](https://github.com/ossacolsale/roam/releases)
+- [Installation and development instructions](README.md#install)
+- [Issue tracker](https://github.com/ossacolsale/roam/issues)
+- [Privacy and security](SECURITY.md)

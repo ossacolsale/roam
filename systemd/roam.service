@@ -1,7 +1,5 @@
 [Unit]
 Description=Roam Wi-Fi roaming assistant
-After=NetworkManager.service
-Wants=NetworkManager.service
 
 [Service]
 Type=simple

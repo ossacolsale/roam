@@ -2,3 +2,13 @@ target/release/roamd usr/bin
 target/release/roam-ui usr/bin
 systemd/roam.service usr/lib/systemd/user
 packaging/org.roam.WifiRoaming.desktop usr/share/applications
+packaging/org.roam.WifiRoaming.metainfo.xml usr/share/metainfo
+assets/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg usr/share/icons/hicolor/scalable/apps
+assets/icons/hicolor/16x16/apps/org.roam.WifiRoaming.png usr/share/icons/hicolor/16x16/apps
+assets/icons/hicolor/24x24/apps/org.roam.WifiRoaming.png usr/share/icons/hicolor/24x24/apps
+assets/icons/hicolor/32x32/apps/org.roam.WifiRoaming.png usr/share/icons/hicolor/32x32/apps
+assets/icons/hicolor/48x48/apps/org.roam.WifiRoaming.png usr/share/icons/hicolor/48x48/apps
+assets/icons/hicolor/64x64/apps/org.roam.WifiRoaming.png usr/share/icons/hicolor/64x64/apps
+assets/icons/hicolor/128x128/apps/org.roam.WifiRoaming.png usr/share/icons/hicolor/128x128/apps
+assets/icons/hicolor/256x256/apps/org.roam.WifiRoaming.png usr/share/icons/hicolor/256x256/apps
+assets/icons/hicolor/512x512/apps/org.roam.WifiRoaming.png usr/share/icons/hicolor/512x512/apps

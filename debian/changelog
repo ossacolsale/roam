@@ -1,3 +1,12 @@
+roam (0.1.0-3) unstable; urgency=medium
+
+  * Add application icon and AppStream metadata.
+  * Enable the user service for automatic startup at login.
+  * Install and process the user service through debhelper's user-unit helper.
+  * Complete package metadata and documentation.
+
+ -- Roam contributors <ossacolsale@users.noreply.github.com>  Sat, 03 Oct 2026 12:00:00 +0200
+
 roam (0.1.0-2) unstable; urgency=medium
 
   * Enable the user service through debhelper's systemd user integration so

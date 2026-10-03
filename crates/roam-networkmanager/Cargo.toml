@@ -9,4 +9,4 @@ anyhow.workspace = true
 roam-core.workspace = true
 zbus = { workspace = true, features = ["blocking"] }
 zvariant = "5"
-
+tokio.workspace = true

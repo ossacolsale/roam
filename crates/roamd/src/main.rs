@@ -3,7 +3,7 @@ use roam_core::{
     Candidate, Config, CurrentConnection, Decision, Engine, EngineState, IpcRequest, IpcResponse,
     NetworkStatus, Snapshot, Status,
 };
-use roam_networkmanager::{NetworkManager, WifiBackend};
+use roam_networkmanager::{monitor_events, NetworkManager, WifiBackend};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -22,6 +22,15 @@ use tracing::{info, warn};
 enum Command {
     Configure(Config, oneshot::Sender<Result<()>>),
     Confirm(bool, oneshot::Sender<Result<()>>),
+}
+
+struct Evaluation {
+    status: Status,
+    decision: Decision,
+    device: Option<roam_networkmanager::WifiDevice>,
+    access_points: Vec<roam_networkmanager::ApDetails>,
+    profiles: Vec<roam_networkmanager::ProfileDetails>,
+    observed_current: Option<CurrentConnection>,
 }
 
 #[tokio::main]
@@ -51,23 +60,34 @@ async fn main() -> Result<()> {
         error: None,
     }));
     let (tx, mut rx) = mpsc::channel::<Command>(16);
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<()>();
+    tokio::spawn(async move {
+        loop {
+            let tx = event_tx.clone();
+            match tokio::task::spawn_blocking(move || monitor_events(tx)).await {
+                Ok(Ok(())) => warn!("NetworkManager signal stream ended"),
+                Ok(Err(_)) | Err(_) => warn!("NetworkManager signal stream unavailable"),
+            }
+            time::sleep(Duration::from_secs(5)).await;
+        }
+    });
     tokio::spawn(serve(listener, tx, initial.clone()));
     info!("roaming service started");
 
-    let mut ticker = time::interval(Duration::from_secs(5));
+    let mut ticker = time::interval(Duration::from_secs(30));
     let mut current_candidate = None;
     let mut activation: Option<(String, String, u64)> = None;
     let mut last_scan = 0u64;
     let mut activation_error: Option<String> = None;
     loop {
         tokio::select! {
-            _ = ticker.tick() => {
+            _ = async { tokio::select! { _ = ticker.tick() => {}, _ = event_rx.recv() => {} } } => {
                 let worker_engine=std::mem::replace(&mut engine,Engine::new(config.clone()));
                 let worker_backend=backend.clone();let worker_config=config.clone();
                 let (updated_engine,evaluation)=tokio::task::spawn_blocking(move||{let mut engine=worker_engine;let evaluation=evaluate_once(&worker_backend,&mut engine,&worker_config);(engine,evaluation)}).await?;
                 engine=updated_engine;
                 match evaluation {
-                    Ok((status, decision, device, aps, profiles, observed_current)) => {
+                    Ok(Evaluation { status, decision, device, access_points: aps, profiles, observed_current }) => {
                         let mut activation_finished=false;
                         if let Some((profile_uuid,bssid,deadline)) = activation.clone() {
                             if observed_current.as_ref().is_some_and(|c| c.profile_uuid == profile_uuid && c.bssid.eq_ignore_ascii_case(&bssid) && c.signal.is_some_and(|signal|signal>=35.0)) {
@@ -76,7 +96,7 @@ async fn main() -> Result<()> {
                                 engine.activation_failed(&profile_uuid,&bssid,unix_now()); activation=None; activation_finished=true;
                             }
                         }
-                        if engine.state()==EngineState::Seeking && unix_now().saturating_sub(last_scan)>=15 {
+                        if engine.state()==EngineState::Seeking && unix_now().saturating_sub(last_scan)>=30 {
                             if let Some(device)=device.as_ref(){let backend=backend.clone();let device=device.clone();let _=tokio::task::spawn_blocking(move||backend.request_scan(&device)).await;last_scan=unix_now();}
                         }
                         current_candidate = if activation_finished { None } else { match decision {
@@ -143,14 +163,7 @@ fn evaluate_once(
     backend: &NetworkManager,
     engine: &mut Engine,
     config: &Config,
-) -> Result<(
-    Status,
-    Decision,
-    Option<roam_networkmanager::WifiDevice>,
-    Vec<roam_networkmanager::ApDetails>,
-    Vec<roam_networkmanager::ProfileDetails>,
-    Option<CurrentConnection>,
-)> {
+) -> Result<Evaluation> {
     let devices = backend.wifi_devices()?;
     let profiles = backend.saved_networks()?;
     let device = devices.first().cloned();
@@ -214,7 +227,14 @@ fn evaluate_once(
         eligible,
         error: None,
     };
-    Ok((status, decision, device, aps, profiles, current))
+    Ok(Evaluation {
+        status,
+        decision,
+        device,
+        access_points: aps,
+        profiles,
+        observed_current: current,
+    })
 }
 
 fn activate_candidate(backend: &NetworkManager, candidate: &Candidate) -> Result<()> {
@@ -315,7 +335,7 @@ fn load_config() -> Result<Config> {
         return Ok(config);
     }
     let data = fs::read_to_string(path)?;
-    Ok(toml::from_str(&data).context("parse Roam configuration")?)
+    toml::from_str(&data).context("parse Roam configuration")
 }
 fn save_config(config: &Config) -> Result<()> {
     let path = config_path()?;

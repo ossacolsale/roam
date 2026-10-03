@@ -7,3 +7,6 @@ override_dh_auto_build:
 
 override_dh_auto_clean:
 	cargo clean
+
+override_dh_installsystemduser:
+	dh_installsystemduser roam.service

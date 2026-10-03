@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: roam
-Source: https://example.invalid/roam
+Source: https://github.com/ossacolsale/roam
 
 Files: *
 Copyright: 2026 Roam contributors

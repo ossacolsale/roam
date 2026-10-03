@@ -5,16 +5,29 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     path::PathBuf,
+    process::{Command, Stdio},
     rc::Rc,
 };
 
 fn main() -> glib::ExitCode {
+    start_roaming_service();
     adw::init().expect("initialize libadwaita");
     let app = adw::Application::builder()
         .application_id("org.roam.WifiRoaming")
         .build();
     app.connect_activate(build_window);
     app.run()
+}
+
+fn start_roaming_service() {
+    // Package installation enables this user unit for login. Starting it here
+    // also makes the first GUI launch work in the current session, including
+    // immediately after installing a package while already logged in.
+    let _ = Command::new("systemctl")
+        .args(["--user", "--no-block", "start", "roam.service"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn build_window(app: &adw::Application) {

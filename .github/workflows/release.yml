@@ -1,0 +1,40 @@
+name: Linux release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GTK build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libgtk-4-dev libadwaita-1-dev
+      - name: Verify version tag
+        run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+      - run: cargo build --release --workspace --locked
+      - name: Assemble Linux archive and checksums
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          root="roam-${version}-linux-x86_64"
+          mkdir -p "$root/bin" "$root/share/applications" "$root/share/systemd/user" "$root/share/icons/hicolor/scalable/apps" "$root/share/metainfo"
+          install -m755 target/release/roamd target/release/roam-ui "$root/bin/"
+          install -m644 systemd/roam.service "$root/share/systemd/user/"
+          install -m644 packaging/org.roam.WifiRoaming.desktop "$root/share/applications/"
+          install -m644 packaging/org.roam.WifiRoaming.metainfo.xml "$root/share/metainfo/"
+          install -m644 assets/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg "$root/share/icons/hicolor/scalable/apps/"
+          install -m644 README.md SECURITY.md LICENSE "$root/"
+          tar -czf "${root}.tar.gz" "$root"
+          sha256sum "${root}.tar.gz" > SHA256SUMS
+      - name: Publish pre-release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "roam-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" SHA256SUMS \
+            --title "Roam $GITHUB_REF_NAME" --prerelease \
+            --notes "Linux x86_64 source and binary archive. This pre-release has not completed real NetworkManager roaming validation; see the repository README for known limitations."
