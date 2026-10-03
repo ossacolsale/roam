@@ -41,10 +41,16 @@ your selected roaming policy through NetworkManager.
 
 ## Install
 
-**Available now: build from source.** A Debian/Ubuntu package, Fedora-family
-RPM, Arch/AUR package, and GitHub Release downloads are planned; none have been
-published yet. The repository includes draft Debian, RPM, and Arch packaging
-definitions, but they are not published install channels.
+**Available now: build from source.** No GitHub Releases or downloadable
+release artifacts have been published yet. Debian/Ubuntu packages, a
+Fedora-family RPM, and an Arch/AUR package are also not published. The
+repository contains draft Debian, RPM, and Arch packaging definitions; they
+have not been released through distro repositories or the AUR.
+
+The GitHub release workflow is configured to create a pre-release with a
+Linux x86_64 archive and checksums when a matching `v*` version tag is pushed.
+That workflow has not published a release yet. The archive is not a distro
+package.
 
 Roam requires Linux, NetworkManager, systemd user services, GTK4, and
 libadwaita. It does not support iwd-only, ConnMan, or raw `wpa_supplicant`
@@ -82,8 +88,9 @@ The first service start creates `~/.config/roam/config.toml` with Automatic
 mode, Medium responsiveness, and no eligible profiles. Open Roam and select the
 saved profiles you want it to consider. The enabled user service starts at each
 login and keeps running when the GUI closes. The service runs as your user and
-does not require the whole application to run as root. Package installs enable
-the service for user logins; launching the GUI also starts it in the current
+does not require the whole application to run as root. The draft package
+definitions enable the service for user logins; the source install above
+enables it explicitly. Launching the GUI also starts it in the current
 session if needed. Logging out stops the normal user session, and the service
 starts again at the next login. To opt out for this user, run
 `systemctl --user mask --now roam.service`; to resume, run
@@ -181,7 +188,7 @@ project landing page.
 ## Project links
 
 - [Source repository](https://github.com/ossacolsale/roam)
-- [Releases and downloads](https://github.com/ossacolsale/roam/releases)
+- [GitHub Releases (none published yet)](https://github.com/ossacolsale/roam/releases)
 - [Installation and development instructions](README.md#install)
 - [Issue tracker](https://github.com/ossacolsale/roam/issues)
 - [Privacy and security](SECURITY.md)
