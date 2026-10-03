@@ -35,17 +35,27 @@ fn build_window(app: &adw::Application) {
         .application(app)
         .title("Roam")
         .default_width(390)
-        .default_height(620)
+        .default_height(700)
         .build();
     let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
     root.set_margin_top(22);
     root.set_margin_bottom(22);
     root.set_margin_start(22);
     root.set_margin_end(22);
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let heading = gtk::Label::new(Some("Roam"));
     heading.add_css_class("title-1");
     heading.set_xalign(0.0);
-    root.append(&heading);
+    heading.set_hexpand(true);
+    header.append(&heading);
+    let close_button = gtk::Button::new();
+    close_button.set_child(Some(&gtk::Image::from_icon_name("window-close-symbolic")));
+    close_button.set_tooltip_text(Some("Close window"));
+    close_button.add_css_class("flat");
+    let close_window = window.clone();
+    close_button.connect_clicked(move |_| close_window.close());
+    header.append(&close_button);
+    root.append(&header);
     let active = gtk::Label::new(Some("Checking monitoring service…"));
     active.set_xalign(0.0);
     active.set_wrap(true);
@@ -74,9 +84,15 @@ fn build_window(app: &adw::Application) {
     eligible_title.add_css_class("heading");
     root.append(&eligible_title);
     let networks = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    networks.set_margin_top(8);
+    networks.set_margin_bottom(8);
+    networks.set_margin_start(8);
+    networks.set_margin_end(8);
     let network_scroll = gtk::ScrolledWindow::new();
-    network_scroll.set_min_content_height(100);
-    network_scroll.set_max_content_height(240);
+    network_scroll.set_min_content_height(240);
+    network_scroll.set_max_content_height(360);
+    network_scroll.set_vexpand(true);
+    network_scroll.set_has_frame(true);
     network_scroll.set_child(Some(&networks));
     root.append(&network_scroll);
     let current = gtk::Label::new(Some("Current\nNot connected"));

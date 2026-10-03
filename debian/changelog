@@ -1,3 +1,10 @@
+roam (0.1.0-4) unstable; urgency=medium
+
+  * Add a close button to the desktop window.
+  * Give the eligible-network list more space and a visible frame.
+
+ -- Roam contributors <ossacolsale@users.noreply.github.com>  Sat, 03 Oct 2026 13:10:00 +0200
+
 roam (0.1.0-3) unstable; urgency=medium
 
   * Add application icon and AppStream metadata.
