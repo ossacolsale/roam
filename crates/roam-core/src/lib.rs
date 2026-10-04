@@ -98,6 +98,7 @@ pub enum Decision {
     Stay {
         state: EngineState,
         candidate_count: usize,
+        candidate: Option<Candidate>,
     },
     AskForConfirmation(Candidate),
     Roam(Candidate),
@@ -120,14 +121,19 @@ struct SignalTrack {
     history: VecDeque<f32>,
     consecutive: u8,
     last_seen: u64,
+    first_seen: u64,
 }
 
 impl SignalTrack {
     fn add(&mut self, signal: f32, now: u64) {
-        if now.saturating_sub(self.last_seen) > 15 {
+        // The daemon also polls on a 30 second fallback interval. Keep the
+        // same AP's stability history across that gap so an idle desktop can
+        // still establish that a candidate is consistently good.
+        if now.saturating_sub(self.last_seen) > 60 {
             self.history.clear();
             self.consecutive = 0;
             self.ema = signal;
+            self.first_seen = now;
         }
         self.ema = EMA_ALPHA * signal + (1.0 - EMA_ALPHA) * self.ema;
         self.history.push_back(signal);
@@ -166,6 +172,8 @@ struct Policy {
     confirmations: u8,
     cooldown_secs: u64,
     suppression_secs: u64,
+    degraded_secs: u64,
+    candidate_stable_secs: u64,
 }
 
 impl From<Responsiveness> for Policy {
@@ -173,30 +181,36 @@ impl From<Responsiveness> for Policy {
         match value {
             Responsiveness::Low => Self {
                 advantage: 15.0,
-                minimum_candidate_signal: 48.0,
+                minimum_candidate_signal: 60.0,
                 degraded_signal: 28.0,
                 critical_signal: 12.0,
                 confirmations: 3,
                 cooldown_secs: 90,
                 suppression_secs: 300,
+                degraded_secs: 30,
+                candidate_stable_secs: 20,
             },
             Responsiveness::Medium => Self {
                 advantage: 12.0,
-                minimum_candidate_signal: 42.0,
+                minimum_candidate_signal: 55.0,
                 degraded_signal: 35.0,
                 critical_signal: 18.0,
                 confirmations: 2,
                 cooldown_secs: 60,
                 suppression_secs: 180,
+                degraded_secs: 20,
+                candidate_stable_secs: 12,
             },
             Responsiveness::High => Self {
                 advantage: 9.0,
-                minimum_candidate_signal: 38.0,
+                minimum_candidate_signal: 50.0,
                 degraded_signal: 42.0,
                 critical_signal: 22.0,
                 confirmations: 2,
                 cooldown_secs: 30,
                 suppression_secs: 120,
+                degraded_secs: 12,
+                candidate_stable_secs: 8,
             },
         }
     }
@@ -211,6 +225,8 @@ pub struct Engine {
     failed_until: HashMap<String, u64>,
     pending: Option<Candidate>,
     state: EngineState,
+    degraded_since: Option<u64>,
+    degraded_key: Option<String>,
 }
 
 impl Engine {
@@ -223,6 +239,8 @@ impl Engine {
             failed_until: HashMap::new(),
             pending: None,
             state: EngineState::Stable,
+            degraded_since: None,
+            degraded_key: None,
         }
     }
 
@@ -233,6 +251,8 @@ impl Engine {
         self.config = config;
         self.pending = None;
         self.state = EngineState::Stable;
+        self.degraded_since = None;
+        self.degraded_key = None;
     }
     pub fn state(&self) -> EngineState {
         self.state
@@ -261,6 +281,10 @@ impl Engine {
             });
         let current = current_signal.unwrap_or(0.0);
         let current_key = current_conn.map(|c| key(&c.profile_uuid, &c.bssid));
+        if current_key != self.degraded_key {
+            self.degraded_since = None;
+            self.degraded_key = current_key.clone();
+        }
         let current_unstable = current_key
             .as_ref()
             .and_then(|k| self.tracks.get(k))
@@ -269,10 +293,18 @@ impl Engine {
             .as_ref()
             .and_then(|k| self.tracks.get(k))
             .is_some_and(|t| is_degrading(&t.history));
-        let degrading = current_signal.is_none()
+        let degraded_now = current_signal.is_none()
             || current <= policy.degraded_signal
             || current_unstable
             || current_degrading_trend;
+        if current_signal.is_none() || degraded_now {
+            self.degraded_since.get_or_insert(snapshot.now);
+        } else if current > policy.degraded_signal + 8.0 {
+            self.degraded_since = None;
+        }
+        let degrading = self.degraded_since.is_some_and(|since| {
+            snapshot.now.saturating_sub(since) >= policy.degraded_secs
+        });
 
         let mut candidates: Vec<Candidate> = Vec::new();
         for ap in &snapshot.access_points {
@@ -297,10 +329,13 @@ impl Engine {
             let k = key(profile, &ap.bssid);
             self.observe(&k, signal, snapshot.now);
             let track = &self.tracks[&k];
-            if track.unstable() || track.consecutive < policy.confirmations {
+            if track.unstable()
+                || track.consecutive < policy.confirmations
+                || snapshot.now.saturating_sub(track.first_seen) < policy.candidate_stable_secs
+            {
                 continue;
             }
-            if current_signal.is_none() && track.ema < policy.minimum_candidate_signal {
+            if track.ema < policy.minimum_candidate_signal {
                 continue;
             }
             if self.suppressed.contains_key(&k) || self.failed_until.contains_key(&k) {
@@ -325,10 +360,13 @@ impl Engine {
             return self.stay(
                 if degrading {
                     EngineState::Seeking
+                } else if degraded_now {
+                    EngineState::Degrading
                 } else {
                     EngineState::Stable
                 },
                 count,
+                None,
             );
         };
 
@@ -339,10 +377,10 @@ impl Engine {
             .is_some_and(|until| until > snapshot.now)
             && !emergency
         {
-            return self.stay(EngineState::Cooldown, count);
+            return self.stay(EngineState::Cooldown, count, Some(candidate));
         }
         if !degrading && !emergency {
-            return self.stay(EngineState::CandidateFound, count);
+            return self.stay(EngineState::CandidateFound, count, Some(candidate));
         }
         self.pending = Some(candidate.clone());
         match self.config.mode {
@@ -381,6 +419,8 @@ impl Engine {
             Some(now.saturating_add(Policy::from(self.config.responsiveness).cooldown_secs));
         self.pending = None;
         self.state = EngineState::Cooldown;
+        self.degraded_since = None;
+        self.degraded_key = None;
         self.tracks.clear();
     }
 
@@ -405,15 +445,17 @@ impl Engine {
                 history: VecDeque::from([signal]),
                 consecutive: 1,
                 last_seen: now,
+                first_seen: now,
             });
     }
 
-    fn stay(&mut self, state: EngineState, count: usize) -> Decision {
+    fn stay(&mut self, state: EngineState, count: usize, candidate: Option<Candidate>) -> Decision {
         self.pending = None;
         self.state = state;
         Decision::Stay {
             state,
             candidate_count: count,
+            candidate,
         }
     }
 }

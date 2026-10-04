@@ -88,6 +88,10 @@ async fn main() -> Result<()> {
                 engine=updated_engine;
                 match evaluation {
                     Ok(Evaluation { status, decision, device, access_points: aps, profiles, observed_current }) => {
+                        let observed_candidate = match &decision {
+                            Decision::Roam(candidate) | Decision::AskForConfirmation(candidate) => Some(candidate.clone()),
+                            Decision::Stay { candidate, .. } => candidate.clone(),
+                        };
                         let mut activation_finished=false;
                         if let Some((profile_uuid,bssid,deadline)) = activation.clone() {
                             if observed_current.as_ref().is_some_and(|c| c.profile_uuid == profile_uuid && c.bssid.eq_ignore_ascii_case(&bssid) && c.signal.is_some_and(|signal|signal>=35.0)) {
@@ -96,7 +100,7 @@ async fn main() -> Result<()> {
                                 engine.activation_failed(&profile_uuid,&bssid,unix_now()); activation=None; activation_finished=true;
                             }
                         }
-                        if engine.state()==EngineState::Seeking && unix_now().saturating_sub(last_scan)>=30 {
+                        if matches!(engine.state(), EngineState::Degrading | EngineState::Seeking | EngineState::CandidateFound) && unix_now().saturating_sub(last_scan)>=30 {
                             if let Some(device)=device.as_ref(){let backend=backend.clone();let device=device.clone();let _=tokio::task::spawn_blocking(move||backend.request_scan(&device)).await;last_scan=unix_now();}
                         }
                         current_candidate = if activation_finished { None } else { match decision {
@@ -115,7 +119,7 @@ async fn main() -> Result<()> {
                             Decision::Stay { .. } => None,
                         }};
                         let mut status = status;
-                        status.candidate = current_candidate.as_ref().and_then(|(c,_)| profiles.iter().find(|p| p.core.profile_uuid == c.profile_uuid).map(|p| NetworkStatus { profile_uuid: c.profile_uuid.clone(), name: network_name(&p.core.ssid,&p.core.id), signal: Some(c.filtered_signal.clamp(0.0,100.0) as u8), eligible:true,available:true }));
+                        status.candidate = observed_candidate.as_ref().and_then(|c| profiles.iter().find(|p| p.core.profile_uuid == c.profile_uuid).map(|p| NetworkStatus { profile_uuid: c.profile_uuid.clone(), name: network_name(&p.core.ssid,&p.core.id), signal: Some(c.filtered_signal.clamp(0.0,100.0) as u8), eligible:true,available:true }));
                         status.state = state_name(engine.state()).into();
                         status.error=activation_error.clone();
                         *initial.write().await = status;

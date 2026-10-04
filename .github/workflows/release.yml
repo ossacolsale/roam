@@ -22,12 +22,13 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           root="roam-${version}-linux-x86_64"
-          mkdir -p "$root/bin" "$root/share/applications" "$root/share/systemd/user" "$root/share/icons/hicolor/scalable/apps" "$root/share/metainfo"
+          mkdir -p "$root/bin" "$root/share/applications" "$root/share/systemd/user" "$root/share/icons/hicolor/scalable/apps" "$root/share/metainfo" "$root/scripts"
           install -m755 target/release/roamd target/release/roam-ui "$root/bin/"
           install -m644 systemd/roam.service "$root/share/systemd/user/"
           install -m644 packaging/org.roam.WifiRoaming.desktop "$root/share/applications/"
           install -m644 packaging/org.roam.WifiRoaming.metainfo.xml "$root/share/metainfo/"
           install -m644 assets/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg "$root/share/icons/hicolor/scalable/apps/"
+          install -m755 scripts/install-archive.sh scripts/install-artifacts.sh "$root/scripts/"
           install -m644 README.md SECURITY.md LICENSE "$root/"
           tar -czf "${root}.tar.gz" "$root"
           sha256sum "${root}.tar.gz" > SHA256SUMS

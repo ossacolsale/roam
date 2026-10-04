@@ -1,0 +1,43 @@
+_roam_stop_running_users() {
+  local state=/run/roam-package-upgrade.users runtime uid username
+  umask 077
+  [[ -e $state ]] || : > "$state"
+  for runtime in /run/user/[0-9]*; do
+    [[ -d $runtime && -S $runtime/bus ]] || continue
+    uid=${runtime##*/}
+    username=$(getent passwd "$uid" | cut -d: -f1) || continue
+    [[ -n $username ]] || continue
+    if runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+      systemctl --user is-active --quiet roam.service; then
+      printf '%s\n' "$uid" >> "$state"
+      runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+        systemctl --user stop roam.service || true
+    fi
+  done
+}
+
+_roam_restart_previous_users() {
+  local state=/run/roam-package-upgrade.users uid runtime username
+  [[ -r $state ]] || return 0
+  while IFS= read -r uid; do
+    [[ $uid =~ ^[0-9]+$ ]] || continue
+    runtime="/run/user/$uid"
+    [[ -d $runtime && -S $runtime/bus ]] || continue
+    username=$(getent passwd "$uid" | cut -d: -f1) || continue
+    [[ -n $username ]] || continue
+    runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+      systemctl --user daemon-reload || true
+    runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+      systemctl --user start roam.service || true
+  done < "$state"
+  rm -f "$state"
+}
+
+pre_install() { _roam_stop_running_users; }
+pre_upgrade() { _roam_stop_running_users; }
+post_install() { _roam_restart_previous_users; }
+post_upgrade() { _roam_restart_previous_users; }

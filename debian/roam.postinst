@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+restart_previously_running_user_services() {
+	state=/run/roam-package-upgrade.users
+	[ -r "$state" ] || return 0
+	while IFS= read -r uid; do
+		case "$uid" in ''|*[!0-9]*) continue ;; esac
+		runtime="/run/user/$uid"
+		[ -d "$runtime" ] && [ -S "$runtime/bus" ] || continue
+		username=$(getent passwd "$uid" | cut -d: -f1) || continue
+		[ -n "$username" ] || continue
+		runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+			DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+			systemctl --user daemon-reload || true
+		runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+			DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+			systemctl --user start roam.service || true
+	done < "$state"
+	rm -f "$state"
+}
+
+if [ "$1" = configure ] || [ "$1" = abort-upgrade ]; then
+	restart_previously_running_user_services
+fi

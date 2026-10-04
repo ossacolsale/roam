@@ -50,7 +50,8 @@ have not been released through distro repositories or the AUR.
 The GitHub release workflow is configured to create a pre-release with a
 Linux x86_64 archive and checksums when a matching `v*` version tag is pushed.
 That workflow has not published a release yet. The archive is not a distro
-package.
+package; after extracting one, run `scripts/install-archive.sh` from the
+extracted directory to install or update it.
 
 Roam requires Linux, NetworkManager, systemd user services, GTK4, and
 libadwaita. It does not support iwd-only, ConnMan, or raw `wpa_supplicant`
@@ -74,23 +75,23 @@ Build and install the applications and user service (installing binaries in
 user):
 
 ```sh
-cargo build --release --workspace
-sudo install -Dm755 target/release/roamd /usr/bin/roamd
-sudo install -Dm755 target/release/roam-ui /usr/bin/roam-ui
-install -Dm644 systemd/roam.service ~/.config/systemd/user/roam.service
-install -Dm644 packaging/org.roam.WifiRoaming.desktop ~/.local/share/applications/org.roam.WifiRoaming.desktop
-install -Dm644 assets/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg ~/.local/share/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg
-systemctl --user daemon-reload
-systemctl --user enable --now roam.service
+scripts/install-local.sh
 ```
+
+Package upgrades, `scripts/install-local.sh`, and the release archive installer
+stop Roam for logged-in users when it is active before replacing the binaries,
+then start it again afterward. If the service was already inactive, they leave
+it inactive. Package hooks cover Debian packages, RPM packages, and the Arch
+PKGBUILD. They operate only on active user service managers; users who are
+logged out do not have a running Roam process to restart.
 
 The first service start creates `~/.config/roam/config.toml` with Automatic
 mode, Medium responsiveness, and no eligible profiles. Open Roam and select the
 saved profiles you want it to consider. The enabled user service starts at each
 login and keeps running when the GUI closes. The service runs as your user and
 does not require the whole application to run as root. The draft package
-definitions enable the service for user logins; the source install above
-enables it explicitly. Launching the GUI also starts it in the current
+definitions enable the service for user logins; a first source install enables
+and starts it. Launching the GUI also starts it in the current
 session if needed. Logging out stops the normal user session, and the service
 starts again at the next login. To opt out for this user, run
 `systemctl --user mask --now roam.service`; to resume, run
@@ -104,6 +105,13 @@ starts again at the next login. To opt out for this user, run
   earlier roaming, and High considers alternatives earlier.
 - **Eligible networks:** Only checked saved NetworkManager profiles are
   candidates. Unknown access points are ignored.
+
+Automatic roaming waits until the current connection has stayed degraded for
+30 seconds (Low), 20 seconds (Medium), or 12 seconds (High). The alternative
+must also remain visible and stable for at least 20, 12, or 8 seconds
+respectively, and reach a good signal level. The candidate field shows the
+best eligible alternative once it meets those signal and stability checks,
+including while Roam is still waiting for the current connection's dwell time.
 
 Roam activates a specific visible access point with NetworkManager's D-Bus
 `ActivateConnection` method. It does not disconnect first, edit profiles, or

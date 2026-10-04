@@ -1,16 +1,17 @@
 # Development package definition. This PKGBUILD has not been submitted to AUR.
 pkgname=roam-git
 pkgver=0.1.0.r0.g0000000
-pkgrel=1
+pkgrel=2
 pkgdesc='Local Linux Wi-Fi roaming assistant for selected NetworkManager profiles'
 arch=('x86_64' 'aarch64')
 url='https://github.com/ossacolsale/roam'
 license=('MIT')
-depends=('networkmanager' 'systemd' 'gtk4' 'libadwaita')
+depends=('networkmanager' 'systemd' 'gtk4' 'libadwaita' 'util-linux')
 makedepends=('git' 'rust' 'cargo' 'pkgconf')
 provides=('roam')
 conflicts=('roam')
 source=("roam::git+https://github.com/ossacolsale/roam.git")
+install=roam.install
 sha256sums=('SKIP')
 
 pkgver() {

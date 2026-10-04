@@ -1,3 +1,23 @@
+roam (0.1.0-7) unstable; urgency=medium
+
+  * Add the active-service-preserving installer to release archives.
+
+ -- Roam contributors <ossacolsale@users.noreply.github.com>  Sun, 04 Oct 2026 09:11:08 +0200
+
+roam (0.1.0-6) unstable; urgency=medium
+
+  * Stop and restart active user services when replacing Roam binaries.
+  * Apply the same service-state handling to source, RPM, and Arch installs.
+
+ -- Roam contributors <ossacolsale@users.noreply.github.com>  Sun, 04 Oct 2026 09:04:27 +0200
+
+roam (0.1.0-5) unstable; urgency=medium
+
+  * Tune automatic roaming for sustained weak connections and stable alternatives.
+  * Show the best eligible candidate while the policy waits to switch.
+
+ -- Roam contributors <ossacolsale@users.noreply.github.com>  Sun, 04 Oct 2026 08:51:29 +0200
+
 roam (0.1.0-4) unstable; urgency=medium
 
   * Add a close button to the desktop window.

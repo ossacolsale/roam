@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+stop_running_user_services() {
+	state=/run/roam-package-upgrade.users
+	umask 077
+	[ -e "$state" ] || : > "$state"
+	chmod 600 "$state"
+	for runtime in /run/user/[0-9]*; do
+		[ -d "$runtime" ] && [ -S "$runtime/bus" ] || continue
+		uid=${runtime##*/}
+		username=$(getent passwd "$uid" | cut -d: -f1) || continue
+		[ -n "$username" ] || continue
+		if runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+			DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+			systemctl --user is-active --quiet roam.service; then
+			printf '%s\n' "$uid" >> "$state"
+			runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+				DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+				systemctl --user stop roam.service || true
+		fi
+	done
+}
+
+if [ "$1" = upgrade ]; then
+	stop_running_user_services
+fi
+
+#DEBHELPER#

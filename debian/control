@@ -9,7 +9,7 @@ Rules-Requires-Root: no
 
 Package: roam
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, network-manager, systemd
+Depends: ${shlibs:Depends}, ${misc:Depends}, network-manager, systemd, util-linux
 Description: local Wi-Fi roaming assistant
  A local Linux Wi-Fi roaming assistant that automatically switches between
  user-selected saved NetworkManager Wi-Fi profiles when the current
