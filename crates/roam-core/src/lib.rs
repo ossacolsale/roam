@@ -302,9 +302,9 @@ impl Engine {
         } else if current > policy.degraded_signal + 8.0 {
             self.degraded_since = None;
         }
-        let degrading = self.degraded_since.is_some_and(|since| {
-            snapshot.now.saturating_sub(since) >= policy.degraded_secs
-        });
+        let degrading = self
+            .degraded_since
+            .is_some_and(|since| snapshot.now.saturating_sub(since) >= policy.degraded_secs);
 
         let mut candidates: Vec<Candidate> = Vec::new();
         for ap in &snapshot.access_points {
@@ -615,10 +615,17 @@ mod tests {
         })
     }
     fn eval(e: &mut Engine, now: u64, cur: f32, aps: Vec<AccessPoint>) -> Decision {
+        let access_points = aps
+            .into_iter()
+            .map(|mut ap| {
+                ap.observed_at = now;
+                ap
+            })
+            .collect();
         e.evaluate(&Snapshot {
             now,
             current: Some(current(cur)),
-            access_points: aps,
+            access_points,
         })
     }
 
@@ -648,19 +655,23 @@ mod tests {
         );
         let _ = eval(
             &mut e,
-            1,
+            12,
             38.,
             vec![ap(Some("lab"), "00:00:00:00:00:02", 76.)],
         );
-        assert!(matches!(
-            eval(
-                &mut e,
-                2,
-                20.,
-                vec![ap(Some("lab"), "00:00:00:00:00:02", 74.)]
-            ),
-            Decision::Roam(_)
-        ));
+        let _ = eval(
+            &mut e,
+            32,
+            20.,
+            vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
+        );
+        let decision = eval(
+            &mut e,
+            52,
+            20.,
+            vec![ap(Some("lab"), "00:00:00:00:00:02", 74.)],
+        );
+        assert!(matches!(decision, Decision::Roam(_)), "{decision:?}");
     }
     #[test]
     fn small_advantage_stays() {
@@ -718,7 +729,7 @@ mod tests {
         assert!(matches!(
             eval(
                 &mut e,
-                1,
+                20,
                 20.,
                 vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)]
             ),
@@ -734,9 +745,9 @@ mod tests {
         });
         let mut same = ap(Some("office"), "00:00:00:00:00:02", 80.);
         same.ssid = b"Office".to_vec();
-        for n in 0..2 {
+        for n in [0, 20] {
             let d = eval(&mut e, n, 20., vec![same.clone()]);
-            if n == 1 {
+            if n == 20 {
                 assert!(matches!(d, Decision::Roam(_)));
             }
         }
@@ -752,12 +763,12 @@ mod tests {
         );
         let d = eval(
             &mut e,
-            1,
+            20,
             20.,
             vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
         );
         assert!(matches!(d, Decision::AskForConfirmation(_)));
-        let accepted = e.confirm(true, 1);
+        let accepted = e.confirm(true, 20);
         assert!(accepted.is_some());
     }
     #[test]
@@ -772,22 +783,22 @@ mod tests {
         assert!(matches!(
             eval(
                 &mut e,
-                1,
+                20,
                 20.,
                 vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)]
             ),
             Decision::Roam(_)
         ));
-        e.activation_succeeded(2);
+        e.activation_succeeded(20);
         let _ = eval(
             &mut e,
-            3,
+            21,
             20.,
             vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
         );
         let d = eval(
             &mut e,
-            4,
+            33,
             20.,
             vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
         );
@@ -810,16 +821,16 @@ mod tests {
         );
         let d = eval(
             &mut e,
-            1,
+            20,
             20.,
             vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
         );
         assert!(matches!(d, Decision::Roam(_)));
-        e.activation_failed("lab", "00:00:00:00:00:02", 2);
+        e.activation_failed("lab", "00:00:00:00:00:02", 21);
         assert!(!matches!(
             eval(
                 &mut e,
-                3,
+                22,
                 20.,
                 vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)]
             ),
@@ -846,17 +857,17 @@ mod tests {
         assert!(matches!(
             eval(
                 &mut e,
-                1,
+                20,
                 20.,
                 vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)]
             ),
             Decision::AskForConfirmation(_)
         ));
-        e.ignore_pending(1);
+        e.ignore_pending(20);
         assert!(matches!(
             eval(
                 &mut e,
-                2,
+                21,
                 20.,
                 vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)]
             ),
@@ -871,7 +882,7 @@ mod tests {
             eligible_profiles: vec!["lab".into()],
         });
         let mut medium = engine(Mode::Automatic);
-        for n in 0..2 {
+        for n in [0, 8] {
             eval(
                 &mut high,
                 n,
@@ -888,7 +899,7 @@ mod tests {
         assert!(matches!(
             eval(
                 &mut high,
-                2,
+                12,
                 40.,
                 vec![ap(Some("lab"), "00:00:00:00:00:02", 62.)]
             ),
@@ -897,7 +908,7 @@ mod tests {
         assert!(matches!(
             eval(
                 &mut medium,
-                2,
+                12,
                 40.,
                 vec![ap(Some("lab"), "00:00:00:00:00:02", 62.)]
             ),
@@ -933,9 +944,12 @@ mod tests {
         let snapshot = |now| Snapshot {
             now,
             current: None,
-            access_points: vec![ap(Some("lab"), "00:00:00:00:00:02", 70.)],
+            access_points: vec![AccessPoint {
+                observed_at: now,
+                ..ap(Some("lab"), "00:00:00:00:00:02", 70.)
+            }],
         };
         assert!(matches!(e.evaluate(&snapshot(0)), Decision::Stay { .. }));
-        assert!(matches!(e.evaluate(&snapshot(1)), Decision::Roam(_)));
+        assert!(matches!(e.evaluate(&snapshot(20)), Decision::Roam(_)));
     }
 }
