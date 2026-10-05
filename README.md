@@ -50,9 +50,18 @@ have not been released through distro repositories or the AUR.
 The GitHub release workflow creates a prerelease with a Linux x86_64 archive
 and checksums from a matching version tag. No release has been published yet.
 To prepare one, update the workspace version in `Cargo.toml`, commit the
-release changes, and push the matching immutable tag (for example, `v0.1.0`).
-Alternatively, use **Actions → Linux release → Run workflow** and enter an
-existing tag. The workflow checks out that tag, runs formatting, lint, test,
+release changes, then create and push the matching immutable tag (for example,
+`v0.1.0`):
+
+```sh
+git tag -a v0.1.0 -m "Roam v0.1.0"
+git push origin v0.1.0
+```
+
+Pushing the tag starts the release workflow. Alternatively, use
+**Actions → Linux release → Run workflow** and enter a tag that already exists
+on GitHub; a missing tag stops with an explanatory error. The workflow checks
+out that tag, runs formatting, lint, test,
 and release-build checks, packages and validates the archive, then creates or
 updates the GitHub prerelease. Rerun the same tag from the corrected default
 branch when the workflow needs a fix; the tag stays in place and artifacts
