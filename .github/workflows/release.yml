@@ -3,24 +3,91 @@ name: Linux release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build and publish (for example v0.1.0)
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  validate-target:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.target.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve and validate release tag
+        id: target
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="$REQUESTED_TAG"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            git fetch --no-tags origin "refs/tags/$tag:refs/tags/$tag"
+          fi
+          git show-ref --verify --quiet "refs/tags/$tag"
+          git checkout --detach "$tag"
+          cargo metadata --no-deps --format-version 1 --locked > /dev/null
+          version="${tag#v}"
+          workspace_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          test "$version" = "$workspace_version"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate-target
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-target.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Install GTK build dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libgtk-4-dev libadwaita-1-dev
-      - name: Verify version tag
-        run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace
       - run: cargo build --release --workspace --locked
-      - name: Assemble Linux archive and checksums
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roam-binaries-${{ needs.validate-target.outputs.tag }}
+          path: |
+            target/release/roamd
+            target/release/roam-ui
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    needs: [validate-target, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-target.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: roam-binaries-${{ needs.validate-target.outputs.tag }}
+          path: target/release
+      - name: Assemble archive and checksums
+        env:
+          RELEASE_TAG: ${{ needs.validate-target.outputs.tag }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
           root="roam-${version}-linux-x86_64"
           mkdir -p "$root/bin" "$root/share/applications" "$root/share/systemd/user" "$root/share/icons/hicolor/scalable/apps" "$root/share/metainfo" "$root/scripts"
           install -m755 target/release/roamd target/release/roam-ui "$root/bin/"
@@ -32,10 +99,105 @@ jobs:
           install -m644 README.md SECURITY.md LICENSE "$root/"
           tar -czf "${root}.tar.gz" "$root"
           sha256sum "${root}.tar.gz" > SHA256SUMS
-      - name: Publish pre-release artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roam-release-${{ needs.validate-target.outputs.tag }}
+          path: |
+            roam-*-linux-x86_64.tar.gz
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  validate-artifact:
+    needs: [validate-target, package]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: roam-release-${{ needs.validate-target.outputs.tag }}
+      - name: Validate archive contents, integrity, and checksums
+        run: |
+          set -euo pipefail
+          archive=(roam-*-linux-x86_64.tar.gz)
+          test "${#archive[@]}" -eq 1
+          tar -tzf "${archive[0]}" > archive-files.txt
+          gzip -t "${archive[0]}"
+          sha256sum -c SHA256SUMS
+          python3 - "${archive[0]}" <<'PY'
+          import pathlib, sys, tarfile
+
+          archive = pathlib.Path(sys.argv[1])
+          versioned_root = archive.name.removesuffix(".tar.gz")
+          required = {
+              f"{versioned_root}/bin/roamd",
+              f"{versioned_root}/bin/roam-ui",
+              f"{versioned_root}/share/systemd/user/roam.service",
+              f"{versioned_root}/share/applications/org.roam.WifiRoaming.desktop",
+              f"{versioned_root}/share/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg",
+              f"{versioned_root}/share/metainfo/org.roam.WifiRoaming.metainfo.xml",
+              f"{versioned_root}/scripts/install-archive.sh",
+              f"{versioned_root}/scripts/install-artifacts.sh",
+              f"{versioned_root}/README.md",
+              f"{versioned_root}/SECURITY.md",
+              f"{versioned_root}/LICENSE",
+          }
+          with tarfile.open(archive, "r:gz") as bundle:
+              members = bundle.getmembers()
+              names = {member.name for member in members}
+              if not required <= names:
+                  raise SystemExit(f"archive is incomplete: {sorted(required - names)}")
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(f"unsafe archive path: {member.name}")
+                  if any(part.startswith(".") for part in path.parts[1:]):
+                      raise SystemExit(f"unexpected hidden path: {member.name}")
+                  if path.parts[1:2] == (".git",) or path.parts[1:2] == ("target",):
+                      raise SystemExit(f"local build content in archive: {member.name}")
+                  if path.suffix.lower() in {".pem", ".key", ".env"}:
+                      raise SystemExit(f"sensitive file in archive: {member.name}")
+          incomplete = archive.with_name("incomplete.tar.gz")
+          with tarfile.open(archive, "r:gz") as source, tarfile.open(incomplete, "w:gz") as target:
+              for member in source.getmembers():
+                  if member.name == f"{versioned_root}/README.md":
+                      continue
+                  target.addfile(member, source.extractfile(member) if member.isfile() else None)
+          with tarfile.open(incomplete, "r:gz") as bundle:
+              if required <= {member.name for member in bundle.getmembers()}:
+                  raise SystemExit("incomplete archive unexpectedly passed validation")
+          PY
+          cp "${archive[0]}" corrupt.tar.gz
+          printf 'broken' | dd of=corrupt.tar.gz bs=1 seek=0 conv=notrunc status=none
+          if gzip -t corrupt.tar.gz 2>/dev/null; then
+            echo 'corrupt archive unexpectedly passed validation' >&2
+            exit 1
+          fi
+          head -c 32 "${archive[0]}" > truncated.tar.gz
+          if gzip -t truncated.tar.gz 2>/dev/null; then
+            echo 'truncated archive unexpectedly passed validation' >&2
+            exit 1
+          fi
+
+  publish:
+    needs: [validate-target, validate-artifact]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: roam-release-${{ needs.validate-target.outputs.tag }}
+      - name: Create or update GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-target.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "roam-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" SHA256SUMS \
-            --title "Roam $GITHUB_REF_NAME" --prerelease \
-            --notes "Linux x86_64 source and binary archive. This pre-release has not completed real NetworkManager roaming validation; see the repository README for known limitations."
+          set -euo pipefail
+          title="Roam $RELEASE_TAG"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$title" --prerelease
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --title "$title" --prerelease \
+              --notes "Linux x86_64 source and binary archive. See the repository README for supported systems, installation, and known limitations."
+          fi
+          gh release upload "$RELEASE_TAG" roam-*-linux-x86_64.tar.gz SHA256SUMS --clobber

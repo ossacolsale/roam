@@ -47,11 +47,18 @@ Fedora-family RPM, and an Arch/AUR package are also not published. The
 repository contains draft Debian, RPM, and Arch packaging definitions; they
 have not been released through distro repositories or the AUR.
 
-The GitHub release workflow is configured to create a pre-release with a
-Linux x86_64 archive and checksums when a matching `v*` version tag is pushed.
-That workflow has not published a release yet. The archive is not a distro
-package; after extracting one, run `scripts/install-archive.sh` from the
-extracted directory to install or update it.
+The GitHub release workflow creates a prerelease with a Linux x86_64 archive
+and checksums from a matching version tag. No release has been published yet.
+To prepare one, update the workspace version in `Cargo.toml`, commit the
+release changes, and push the matching immutable tag (for example, `v0.1.0`).
+Alternatively, use **Actions → Linux release → Run workflow** and enter an
+existing tag. The workflow checks out that tag, runs formatting, lint, test,
+and release-build checks, packages and validates the archive, then creates or
+updates the GitHub prerelease. Rerun the same tag from the corrected default
+branch when the workflow needs a fix; the tag stays in place and artifacts
+are rebuilt from that tag's commit. The archive is not a distro package;
+after extracting one, run `scripts/install-archive.sh` from the extracted
+directory to install or update it.
 
 Roam requires Linux, NetworkManager, systemd user services, GTK4, and
 libadwaita. It does not support iwd-only, ConnMan, or raw `wpa_supplicant`
