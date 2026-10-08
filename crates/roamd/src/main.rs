@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
     tokio::spawn(serve(listener, tx, initial.clone()));
     info!("roaming service started");
 
-    let mut ticker = time::interval(Duration::from_secs(30));
+    let mut ticker = time::interval(Duration::from_secs(10));
     let mut current_candidate = None;
     let mut activation: Option<(String, String, u64)> = None;
     let mut last_scan = 0u64;
@@ -100,8 +100,14 @@ async fn main() -> Result<()> {
                                 engine.activation_failed(&profile_uuid,&bssid,unix_now()); activation=None; activation_finished=true;
                             }
                         }
-                        if matches!(engine.state(), EngineState::Degrading | EngineState::Seeking | EngineState::CandidateFound) && unix_now().saturating_sub(last_scan)>=30 {
-                            if let Some(device)=device.as_ref(){let backend=backend.clone();let device=device.clone();let _=tokio::task::spawn_blocking(move||backend.request_scan(&device)).await;last_scan=unix_now();}
+                        if matches!(engine.state(), EngineState::Degrading | EngineState::Seeking | EngineState::CandidateFound) && unix_now().saturating_sub(last_scan)>=10 {
+                            if let Some(device)=device.as_ref(){
+                                let backend=backend.clone();let device=device.clone();
+                                if let Err(error)=tokio::task::spawn_blocking(move||backend.request_scan(&device)).await? {
+                                    warn!(%error, "could not request Wi-Fi scan");
+                                }
+                                last_scan=unix_now();
+                            }
                         }
                         current_candidate = if activation_finished { None } else { match decision {
                             Decision::Roam(_) if activation.is_some() => None,
@@ -193,7 +199,9 @@ fn evaluate_once(
             .map(|p| NetworkStatus {
                 profile_uuid: c.profile_uuid.clone(),
                 name: network_name(&p.core.ssid, &p.core.id),
-                signal: c.signal.map(|v| v.clamp(0.0, 100.0) as u8),
+                signal: engine
+                    .signal_estimate(&c.profile_uuid, &c.bssid)
+                    .map(|v| v.clamp(0.0, 100.0) as u8),
                 eligible: config.is_eligible(&c.profile_uuid),
                 available: true,
             })
@@ -373,7 +381,7 @@ fn state_name(state: EngineState) -> &'static str {
         EngineState::Stable => "Monitoring",
         EngineState::Degrading => "Weak",
         EngineState::Seeking => "Searching",
-        EngineState::CandidateFound => "Searching",
+        EngineState::CandidateFound => "Candidate ready",
         EngineState::AwaitingConfirmation => "Confirm",
         EngineState::Roaming => "Switching",
         EngineState::Cooldown => "Monitoring",

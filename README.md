@@ -123,11 +123,19 @@ starts again at the next login. To opt out for this user, run
   candidates. Unknown access points are ignored.
 
 Automatic roaming waits until the current connection has stayed degraded for
-30 seconds (Low), 20 seconds (Medium), or 12 seconds (High). The alternative
-must also remain visible and stable for at least 20, 12, or 8 seconds
-respectively, and reach a good signal level. The candidate field shows the
-best eligible alternative once it meets those signal and stability checks,
-including while Roam is still waiting for the current connection's dwell time.
+30 seconds (Low), 20 seconds (Medium), or 12 seconds (High). A brief signal
+seconds before Roam clears it. Signal decisions use the median of up to eight
+samples, with samples spaced at least five seconds apart. Recovery needs at
+least three samples whose median stays above the recovery threshold; one brief
+good reading cannot restart the timer. Medium and High begin seeking
+alternatives at lower points in the UI's Weak signal range than before. The
+alternative must also remain visible and stable for at least 20, 12, or 8
+seconds respectively, and reach a good signal level. While searching or
+waiting for the current connection's dwell time, Roam requests a scan at most
+every 10 seconds. The status changes to “Candidate ready” when a candidate is
+qualified but the current connection's dwell time has not elapsed. The current
+and candidate labels show the filtered signal percentage so you can report
+what the policy is using during a delayed switch.
 
 Roam activates a specific visible access point with NetworkManager's D-Bus
 `ActivateConnection` method. It does not disconnect first, edit profiles, or
@@ -191,7 +199,7 @@ hardware.
 The workspace contains `roam-core` (policy and deterministic tests),
 `roam-networkmanager` (direct D-Bus access), `roamd` (background user service
 and local Unix socket IPC), and `roam-ui` (GTK4/libadwaita client). The daemon
-reacts to NetworkManager D-Bus signals and uses a 30-second fallback check.
+reacts to NetworkManager D-Bus signals and uses a 10-second fallback check.
 It requests scans only while seeking candidates, with a rate limit.
 
 ```sh

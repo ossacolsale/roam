@@ -8,7 +8,8 @@ use std::collections::{HashMap, VecDeque};
 use thiserror::Error;
 
 const HISTORY_LIMIT: usize = 8;
-const EMA_ALPHA: f32 = 0.3;
+const SIGNAL_SAMPLE_INTERVAL_SECS: u64 = 5;
+const MIN_RECOVERY_SAMPLES: usize = 3;
 // NetworkManager's public AccessPoint API reports percentage strength, not
 // dBm. Policy operates on that native 0..100 scale and never presents it as dBm.
 
@@ -117,31 +118,49 @@ pub enum EngineState {
 
 #[derive(Clone, Debug)]
 struct SignalTrack {
-    ema: f32,
     history: VecDeque<f32>,
     consecutive: u8,
     last_seen: u64,
     first_seen: u64,
+    last_sample_at: u64,
 }
 
 impl SignalTrack {
     fn add(&mut self, signal: f32, now: u64) {
-        // The daemon also polls on a 30 second fallback interval. Keep the
+        // The daemon also polls on a 10 second fallback interval. Keep the
         // same AP's stability history across that gap so an idle desktop can
         // still establish that a candidate is consistently good.
-        if now.saturating_sub(self.last_seen) > 60 {
+        let gap = now.saturating_sub(self.last_seen);
+        if gap > 60 {
             self.history.clear();
             self.consecutive = 0;
-            self.ema = signal;
             self.first_seen = now;
+            self.last_sample_at = now;
         }
-        self.ema = EMA_ALPHA * signal + (1.0 - EMA_ALPHA) * self.ema;
-        self.history.push_back(signal);
-        while self.history.len() > HISTORY_LIMIT {
-            self.history.pop_front();
-        }
-        self.consecutive = self.consecutive.saturating_add(1);
         self.last_seen = now;
+        if gap > 60 || now.saturating_sub(self.last_sample_at) >= SIGNAL_SAMPLE_INTERVAL_SECS {
+            self.history.push_back(signal);
+            while self.history.len() > HISTORY_LIMIT {
+                self.history.pop_front();
+            }
+            self.consecutive = self.consecutive.saturating_add(1);
+            self.last_sample_at = now;
+        }
+    }
+
+    fn estimate(&self) -> f32 {
+        let mut samples: Vec<f32> = self.history.iter().copied().collect();
+        samples.sort_by(f32::total_cmp);
+        let middle = samples.len() / 2;
+        if samples.len() & 1 == 0 {
+            (samples[middle - 1] + samples[middle]) / 2.0
+        } else {
+            samples[middle]
+        }
+    }
+
+    fn confirms_recovery(&self, threshold: f32) -> bool {
+        self.history.len() >= MIN_RECOVERY_SAMPLES && self.estimate() > threshold
     }
 
     fn unstable(&self) -> bool {
@@ -174,6 +193,7 @@ struct Policy {
     suppression_secs: u64,
     degraded_secs: u64,
     candidate_stable_secs: u64,
+    recovery_secs: u64,
 }
 
 impl From<Responsiveness> for Policy {
@@ -182,35 +202,38 @@ impl From<Responsiveness> for Policy {
             Responsiveness::Low => Self {
                 advantage: 15.0,
                 minimum_candidate_signal: 60.0,
-                degraded_signal: 28.0,
+                degraded_signal: 30.0,
                 critical_signal: 12.0,
                 confirmations: 3,
                 cooldown_secs: 90,
                 suppression_secs: 300,
                 degraded_secs: 30,
                 candidate_stable_secs: 20,
+                recovery_secs: 10,
             },
             Responsiveness::Medium => Self {
                 advantage: 12.0,
                 minimum_candidate_signal: 55.0,
-                degraded_signal: 35.0,
+                degraded_signal: 42.0,
                 critical_signal: 18.0,
                 confirmations: 2,
                 cooldown_secs: 60,
                 suppression_secs: 180,
                 degraded_secs: 20,
                 candidate_stable_secs: 12,
+                recovery_secs: 10,
             },
             Responsiveness::High => Self {
                 advantage: 9.0,
                 minimum_candidate_signal: 50.0,
-                degraded_signal: 42.0,
+                degraded_signal: 49.0,
                 critical_signal: 22.0,
                 confirmations: 2,
                 cooldown_secs: 30,
                 suppression_secs: 120,
                 degraded_secs: 12,
                 candidate_stable_secs: 8,
+                recovery_secs: 10,
             },
         }
     }
@@ -227,6 +250,7 @@ pub struct Engine {
     state: EngineState,
     degraded_since: Option<u64>,
     degraded_key: Option<String>,
+    healthy_since: Option<u64>,
 }
 
 impl Engine {
@@ -241,6 +265,7 @@ impl Engine {
             state: EngineState::Stable,
             degraded_since: None,
             degraded_key: None,
+            healthy_since: None,
         }
     }
 
@@ -253,9 +278,16 @@ impl Engine {
         self.state = EngineState::Stable;
         self.degraded_since = None;
         self.degraded_key = None;
+        self.healthy_since = None;
     }
     pub fn state(&self) -> EngineState {
         self.state
+    }
+
+    pub fn signal_estimate(&self, profile_uuid: &str, bssid: &str) -> Option<f32> {
+        self.tracks
+            .get(&key(profile_uuid, bssid))
+            .map(SignalTrack::estimate)
     }
 
     /// Evaluate one observation. `eligible_profiles` is rechecked here, even if
@@ -277,12 +309,13 @@ impl Engine {
                 let c = current_conn.expect("signal must belong to a current connection");
                 let k = key(&c.profile_uuid, &c.bssid);
                 self.observe(&k, signal, snapshot.now);
-                self.tracks[&k].ema
+                self.tracks[&k].estimate()
             });
         let current = current_signal.unwrap_or(0.0);
         let current_key = current_conn.map(|c| key(&c.profile_uuid, &c.bssid));
         if current_key != self.degraded_key {
             self.degraded_since = None;
+            self.healthy_since = None;
             self.degraded_key = current_key.clone();
         }
         let current_unstable = current_key
@@ -298,9 +331,19 @@ impl Engine {
             || current_unstable
             || current_degrading_trend;
         if current_signal.is_none() || degraded_now {
+            self.healthy_since = None;
             self.degraded_since.get_or_insert(snapshot.now);
-        } else if current > policy.degraded_signal + 8.0 {
-            self.degraded_since = None;
+        } else if current_key
+            .as_ref()
+            .and_then(|k| self.tracks.get(k))
+            .is_some_and(|track| track.confirms_recovery(policy.degraded_signal + 8.0))
+        {
+            let healthy_since = *self.healthy_since.get_or_insert(snapshot.now);
+            if snapshot.now.saturating_sub(healthy_since) >= policy.recovery_secs {
+                self.degraded_since = None;
+            }
+        } else {
+            self.healthy_since = None;
         }
         let degrading = self
             .degraded_since
@@ -335,13 +378,14 @@ impl Engine {
             {
                 continue;
             }
-            if track.ema < policy.minimum_candidate_signal {
+            let filtered_signal = track.estimate();
+            if filtered_signal < policy.minimum_candidate_signal {
                 continue;
             }
             if self.suppressed.contains_key(&k) || self.failed_until.contains_key(&k) {
                 continue;
             }
-            let advantage = track.ema - current;
+            let advantage = filtered_signal - current;
             if advantage < policy.advantage {
                 continue;
             }
@@ -350,7 +394,7 @@ impl Engine {
                 ssid: ap.ssid.clone(),
                 bssid: ap.bssid.clone(),
                 frequency_mhz: ap.frequency_mhz,
-                filtered_signal: track.ema,
+                filtered_signal,
                 advantage,
             });
         }
@@ -421,6 +465,7 @@ impl Engine {
         self.state = EngineState::Cooldown;
         self.degraded_since = None;
         self.degraded_key = None;
+        self.healthy_since = None;
         self.tracks.clear();
     }
 
@@ -441,11 +486,11 @@ impl Engine {
             .entry(k.to_owned())
             .and_modify(|t| t.add(signal, now))
             .or_insert_with(|| SignalTrack {
-                ema: signal,
                 history: VecDeque::from([signal]),
                 consecutive: 1,
                 last_seen: now,
                 first_seen: now,
+                last_sample_at: now,
             });
     }
 
@@ -673,6 +718,101 @@ mod tests {
         );
         assert!(matches!(decision, Decision::Roam(_)), "{decision:?}");
     }
+
+    #[test]
+    fn medium_roams_from_weak_range_after_dwell() {
+        let mut e = engine(Mode::Automatic);
+        assert!(matches!(
+            eval(
+                &mut e,
+                0,
+                40.,
+                vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)]
+            ),
+            Decision::Stay { .. }
+        ));
+        assert!(matches!(
+            eval(
+                &mut e,
+                12,
+                40.,
+                vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)]
+            ),
+            Decision::Stay {
+                state: EngineState::CandidateFound,
+                ..
+            }
+        ));
+        assert!(matches!(
+            eval(
+                &mut e,
+                20,
+                40.,
+                vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)]
+            ),
+            Decision::Roam(_)
+        ));
+    }
+
+    #[test]
+    fn brief_signal_recovery_does_not_restart_degraded_timer() {
+        let mut e = engine(Mode::Automatic);
+        eval(
+            &mut e,
+            0,
+            42.,
+            vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
+        );
+        eval(
+            &mut e,
+            12,
+            51.,
+            vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
+        );
+        let decision = eval(
+            &mut e,
+            20,
+            42.,
+            vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
+        );
+        assert!(matches!(decision, Decision::Roam(_)), "{decision:?}");
+    }
+
+    #[test]
+    fn sustained_median_recovery_clears_degraded_timer() {
+        let mut e = engine(Mode::Automatic);
+        for now in [0, 5, 10, 15] {
+            eval(
+                &mut e,
+                now,
+                if now == 0 { 42. } else { 52. },
+                vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
+            );
+        }
+        let decision = eval(
+            &mut e,
+            20,
+            52.,
+            vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
+        );
+        assert!(matches!(
+            decision,
+            Decision::Stay {
+                state: EngineState::CandidateFound,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rapid_signal_updates_do_not_overweight_the_median() {
+        let mut e = engine(Mode::Automatic);
+        eval(&mut e, 0, 40., vec![]);
+        eval(&mut e, 1, 100., vec![]);
+        eval(&mut e, 2, 100., vec![]);
+        eval(&mut e, 10, 40., vec![]);
+        assert_eq!(e.signal_estimate("office", "00:00:00:00:00:01"), Some(40.));
+    }
     #[test]
     fn small_advantage_stays() {
         let mut e = engine(Mode::Automatic);
@@ -694,7 +834,7 @@ mod tests {
         for (n, s) in [90., 15., 88., 17., 91.].into_iter().enumerate() {
             let d = eval(
                 &mut e,
-                n as u64,
+                n as u64 * SIGNAL_SAMPLE_INTERVAL_SECS,
                 20.,
                 vec![ap(Some("lab"), "00:00:00:00:00:02", s)],
             );

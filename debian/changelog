@@ -1,3 +1,11 @@
+roam (0.1.1-1) unstable; urgency=medium
+
+  * Use a time-spaced rolling signal median and require sustained recovery
+    before restarting the roaming timer.
+  * Improve scan responsiveness and expose filtered signal levels in the UI.
+
+ -- Roam contributors <ossacolsale@users.noreply.github.com>  Thu, 08 Oct 2026 17:37:00 +0200
+
 roam (0.1.0-7) unstable; urgency=medium
 
   * Add the active-service-preserving installer to release archives.

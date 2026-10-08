@@ -185,14 +185,14 @@ fn build_window(app: &adw::Application) {
             status
                 .current
                 .as_ref()
-                .map(signal_name)
-                .unwrap_or("No signal")
+                .map(signal_summary)
+                .unwrap_or_else(|| "No signal".into())
         ));
         if let Some(c) = status.candidate.as_ref() {
             candidate_label.set_text(&format!(
                 "Better candidate\n{} · {}",
                 c.name,
-                signal_name(c)
+                signal_summary(c)
             ));
             let key = format!("{}:{}", c.profile_uuid, c.name);
             if status.mode == Mode::Confirm && prompted_ui.borrow().as_deref() != Some(key.as_str())
@@ -211,10 +211,10 @@ fn build_window(app: &adw::Application) {
                         status
                             .current
                             .as_ref()
-                            .map(signal_name)
-                            .unwrap_or("No signal"),
+                            .map(signal_summary)
+                            .unwrap_or_else(|| "No signal".into()),
                         c.name,
-                        signal_name(c)
+                        signal_summary(c)
                     )),
                 );
                 dialog.add_response("ignore", "Ignore");
@@ -310,6 +310,12 @@ fn signal_name(network: &NetworkStatus) -> &'static str {
         1..=29 => "Very weak",
         _ => "Searching",
     }
+}
+fn signal_summary(network: &NetworkStatus) -> String {
+    network
+        .signal
+        .map(|signal| format!("{} ({}%)", signal_name(network), signal))
+        .unwrap_or_else(|| "Searching".into())
 }
 fn socket_path() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
