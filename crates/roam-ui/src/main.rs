@@ -106,7 +106,13 @@ fn build_window(app: &adw::Application) {
     window.set_content(Some(&root));
 
     let config = Rc::new(RefCell::new(Config::default()));
-    let socket = socket_path();
+    let socket = match socket_path() {
+        Ok(socket) => socket,
+        Err(error) => {
+            eprintln!("cannot determine Roam IPC socket path: {error}");
+            std::process::exit(1);
+        }
+    };
     let selected = Rc::new(RefCell::new(Vec::<(String, gtk::CheckButton)>::new()));
     let syncing = Rc::new(Cell::new(false));
     let conf = config.clone();
@@ -317,11 +323,12 @@ fn signal_summary(network: &NetworkStatus) -> String {
         .map(|signal| format!("{} ({}%)", signal_name(network), signal))
         .unwrap_or_else(|| "Searching".into())
 }
-fn socket_path() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("roam.sock")
+fn socket_path() -> Result<PathBuf, &'static str> {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    socket_path_from(runtime_dir)
+}
+fn socket_path_from(runtime_dir: Option<PathBuf>) -> Result<PathBuf, &'static str> {
+    roam_core::ipc_socket_path(runtime_dir.as_deref(), unsafe { libc::geteuid() })
 }
 fn send(path: &PathBuf, request: IpcRequest) -> Option<IpcResponse> {
     let mut stream = UnixStream::connect(path).ok()?;
@@ -334,4 +341,15 @@ fn send(path: &PathBuf, request: IpcRequest) -> Option<IpcResponse> {
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line).ok()?;
     serde_json::from_str(&line).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_runtime_directory_has_no_shared_socket_fallback() {
+        let result = socket_path_from(None);
+        assert_eq!(result.unwrap_err(), "XDG_RUNTIME_DIR is not set");
+    }
 }

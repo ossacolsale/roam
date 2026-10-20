@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Validate a private per-user runtime directory for the shared UI and daemon IPC socket, and pin the Rust toolchain action to a reviewed upstream commit while retaining Rust stable.
 - Restricted the CI workflow token to read-only repository contents.
 - Reorganized agent guidance around selective document consultation, split the monolithic requirements into focused documents, and moved release-workflow requirements to scoped GitHub instructions.
 - Improved weak-signal roaming: use a time-spaced rolling median, align Medium and High thresholds with the UI's Weak range, require sustained recovery before restarting the degradation timer, and check/request scans more often while seeking.

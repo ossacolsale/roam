@@ -86,6 +86,12 @@ sudo dnf install gcc pkg-config gtk4-devel libadwaita-devel
 sudo pacman -S base-devel pkgconf gtk4 libadwaita
 ```
 
+CI pins third-party GitHub Actions to full commit SHAs. To update
+`dtolnay/rust-toolchain`, review the intended commit in the official upstream
+repository, confirm it is on the upstream `master` history, and replace the SHA
+consistently in both workflows. Keep `toolchain: stable` so the action code is
+pinned while Rust continues to track the stable channel.
+
 Build and install the applications and user service (installing binaries in
 `/usr/bin` requires administrator privileges; Roam itself still runs as your
 user):

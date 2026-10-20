@@ -7,7 +7,7 @@ use roam_networkmanager::{monitor_events, NetworkManager, WifiBackend};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -43,12 +43,7 @@ async fn main() -> Result<()> {
     let mut engine = Engine::new(config.clone());
     let backend = Arc::new(tokio::task::spawn_blocking(NetworkManager::system).await??);
     let socket = socket_path()?;
-    if socket.exists() {
-        fs::remove_file(&socket).context("remove stale local socket")?;
-    }
-    let listener = UnixListener::bind(&socket).context("create local Roam IPC socket")?;
-    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
-        .context("restrict local socket permissions")?;
+    let listener = bind_socket(&socket)?;
     let initial = Arc::new(RwLock::new(Status {
         monitoring: true,
         state: "Searching".into(),
@@ -365,10 +360,18 @@ fn config_path() -> Result<PathBuf> {
     Ok(base.join("roam/config.toml"))
 }
 fn socket_path() -> Result<PathBuf> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .context("XDG_RUNTIME_DIR is not set")?;
-    Ok(base.join("roam.sock"))
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    roam_core::ipc_socket_path(runtime_dir.as_deref(), unsafe { libc::geteuid() })
+        .map_err(anyhow::Error::msg)
+}
+fn bind_socket(socket: &Path) -> Result<UnixListener> {
+    if socket.exists() {
+        fs::remove_file(socket).context("remove stale local socket")?;
+    }
+    let listener = UnixListener::bind(socket).context("create local Roam IPC socket")?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))
+        .context("restrict local socket permissions")?;
+    Ok(listener)
 }
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -376,6 +379,7 @@ fn unix_now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
 fn state_name(state: EngineState) -> &'static str {
     match state {
         EngineState::Stable => "Monitoring",
@@ -392,5 +396,36 @@ fn network_name(ssid: &[u8], profile_id: &str) -> String {
         profile_id.to_owned()
     } else {
         String::from_utf8_lossy(ssid).into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        os::unix::fs::MetadataExt,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[tokio::test]
+    async fn socket_is_created_in_runtime_directory_with_private_mode() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let runtime_dir =
+            std::env::temp_dir().join(format!("roamd-runtime-{}-{unique}", std::process::id()));
+        fs::create_dir(&runtime_dir).unwrap();
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let socket =
+            roam_core::ipc_socket_path(Some(&runtime_dir), unsafe { libc::geteuid() }).unwrap();
+
+        let _listener = bind_socket(&socket).unwrap();
+        let metadata = fs::metadata(&socket).unwrap();
+        assert_eq!(socket.parent(), Some(runtime_dir.as_path()));
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+
+        fs::remove_file(socket).unwrap();
+        fs::remove_dir(runtime_dir).unwrap();
     }
 }

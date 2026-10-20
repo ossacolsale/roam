@@ -15,6 +15,7 @@ rust-version = "1.83"
 
 [workspace.dependencies]
 anyhow = "1"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "io-util", "sync", "signal"] }

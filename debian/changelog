@@ -1,3 +1,10 @@
+roam (0.1.1-2) unstable; urgency=medium
+
+  * Require a private per-user runtime directory for the shared IPC socket.
+  * Pin the Rust toolchain GitHub Action to a reviewed upstream commit.
+
+ -- Roam contributors <ossacolsale@users.noreply.github.com>  Tue, 20 Oct 2026 10:07:00 +0200
+
 roam (0.1.1-1) unstable; urgency=medium
 
   * Use a time-spaced rolling signal median and require sustained recovery

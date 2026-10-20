@@ -1,10 +1,17 @@
 //! Platform independent Wi-Fi roaming policy.
 //!
-//! The engine accepts snapshots from a backend and returns a decision. It never
-//! performs I/O, stores identifiers on disk, or knows about GTK/NetworkManager.
+//! The engine accepts snapshots from a backend and returns a decision. It does
+//! not perform I/O, store identifiers on disk, or know about GTK/NetworkManager.
+//! This crate also provides shared validation for the local IPC socket path.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+#[cfg(unix)]
+use std::{
+    fs,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 
 const HISTORY_LIMIT: usize = 8;
@@ -12,6 +19,20 @@ const SIGNAL_SAMPLE_INTERVAL_SECS: u64 = 5;
 const MIN_RECOVERY_SAMPLES: usize = 3;
 // NetworkManager's public AccessPoint API reports percentage strength, not
 // dBm. Policy operates on that native 0..100 scale and never presents it as dBm.
+
+/// Resolve the IPC socket below a private, user-owned runtime directory.
+#[cfg(unix)]
+pub fn ipc_socket_path(runtime_dir: Option<&Path>, uid: u32) -> Result<PathBuf, &'static str> {
+    let runtime_dir = runtime_dir.ok_or("XDG_RUNTIME_DIR is not set")?;
+    let metadata = fs::metadata(runtime_dir).map_err(|_| "XDG_RUNTIME_DIR is unavailable")?;
+    let mode = metadata.mode() & 0o777;
+    if !metadata.is_dir() || metadata.uid() != uid || mode & 0o700 != 0o700 || mode & 0o077 != 0 {
+        return Err(
+            "XDG_RUNTIME_DIR must be a private directory owned by the current user with mode 0700",
+        );
+    }
+    Ok(runtime_dir.join("roam.sock"))
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -633,6 +654,42 @@ impl FakeWifiBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn ipc_socket_path_fails_closed_without_runtime_directory() {
+        let error = ipc_socket_path(None, unsafe { libc::geteuid() }).unwrap_err();
+        assert_eq!(error, "XDG_RUNTIME_DIR is not set");
+    }
+
+    #[test]
+    fn ipc_socket_path_requires_private_owned_runtime_directory() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let runtime_dir =
+            std::env::temp_dir().join(format!("roam-runtime-{}-{unique}", std::process::id()));
+        fs::create_dir(&runtime_dir).unwrap();
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let expected = runtime_dir.join("roam.sock");
+        assert_eq!(
+            ipc_socket_path(Some(&runtime_dir), unsafe { libc::geteuid() }).unwrap(),
+            expected
+        );
+        assert!(ipc_socket_path(Some(&runtime_dir), u32::MAX).is_err());
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(ipc_socket_path(Some(&runtime_dir), unsafe { libc::geteuid() }).is_err());
+
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir(runtime_dir).unwrap();
+    }
+
     fn current(signal: f32) -> CurrentConnection {
         CurrentConnection {
             profile_uuid: "office".into(),

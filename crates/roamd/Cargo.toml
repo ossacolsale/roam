@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+libc.workspace = true
 dirs.workspace = true
 roam-core.workspace = true
 roam-networkmanager.workspace = true
