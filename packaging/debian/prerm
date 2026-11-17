@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+state=/run/roam-package-upgrade.users
+case "${1:-}" in
+  upgrade)
+    umask 077
+    : > "$state"
+    ;;
+  remove|deconfigure)
+    rm -f "$state"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+for runtime in /run/user/[0-9]*; do
+  [ -d "$runtime" ] && [ -S "$runtime/bus" ] || continue
+  uid=${runtime##*/}
+  case "$uid" in ''|*[!0-9]*) continue ;; esac
+  username=$(getent passwd "$uid" | cut -d: -f1) || continue
+  [ -n "$username" ] || continue
+  if runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+    systemctl --user is-active --quiet roam.service; then
+    if [ "${1:-}" = upgrade ]; then
+      printf '%s\n' "$uid" >> "$state"
+    fi
+    runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+      systemctl --user stop roam.service || true
+  fi
+done
+exit 0

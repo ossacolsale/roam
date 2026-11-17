@@ -273,6 +273,10 @@ candidate detected
 => confirmation required
 ```
 
+If the current connection recovers before the user responds, close the pending
+confirmation dialog. If another candidate needs confirmation, replace the
+existing dialog so only one is open.
+
 ### Scenario I — failed activation
 
 Expected:

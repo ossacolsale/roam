@@ -247,6 +247,10 @@ Strong
 [ Ignore ] [ Switch ]
 ```
 
+Only one confirmation dialog may be open at a time. A new candidate replaces
+the previous dialog, and a dialog closes when the current connection has
+recovered before the user responds.
+
 Do not expose RSSI thresholds, hysteresis, timers, BSSID or other technical parameters in the normal UI.
 
 ---

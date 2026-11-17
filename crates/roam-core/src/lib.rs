@@ -968,6 +968,41 @@ mod tests {
         let accepted = e.confirm(true, 20);
         assert!(accepted.is_some());
     }
+
+    #[test]
+    fn recovered_signal_clears_pending_confirmation() {
+        let mut e = engine(Mode::Confirm);
+        for now in [0, 20] {
+            let decision = eval(
+                &mut e,
+                now,
+                35.,
+                vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
+            );
+            if now == 20 {
+                assert!(matches!(decision, Decision::AskForConfirmation(_)));
+            }
+        }
+        for now in [25, 30, 35, 40, 45] {
+            let decision = eval(
+                &mut e,
+                now,
+                52.,
+                vec![ap(Some("lab"), "00:00:00:00:00:02", 75.)],
+            );
+            if now == 45 {
+                assert!(matches!(
+                    decision,
+                    Decision::Stay {
+                        state: EngineState::CandidateFound,
+                        ..
+                    }
+                ));
+                assert!(e.confirm(true, now).is_none());
+            }
+        }
+    }
+
     #[test]
     fn cooldown_prevents_ping_pong() {
         let mut e = engine(Mode::Automatic);

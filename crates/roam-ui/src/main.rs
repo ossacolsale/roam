@@ -9,6 +9,12 @@ use std::{
     rc::Rc,
 };
 
+struct ActivePrompt {
+    key: String,
+    dialog: adw::AlertDialog,
+    closed_automatically: Rc<Cell<bool>>,
+}
+
 fn main() -> glib::ExitCode {
     start_roaming_service();
     adw::init().expect("initialize libadwaita");
@@ -164,6 +170,8 @@ fn build_window(app: &adw::Application) {
     let socket_ui = socket.clone();
     let prompted = Rc::new(RefCell::new(None::<String>));
     let prompted_ui = prompted.clone();
+    let active_prompt = Rc::new(RefCell::new(None::<ActivePrompt>));
+    let active_prompt_ui = active_prompt.clone();
     let parent = window.clone();
     let syncing_ui = syncing.clone();
     glib::timeout_add_seconds_local(3, move || {
@@ -200,49 +208,81 @@ fn build_window(app: &adw::Application) {
                 c.name,
                 signal_summary(c)
             ));
-            let key = format!("{}:{}", c.profile_uuid, c.name);
-            if status.mode == Mode::Confirm && prompted_ui.borrow().as_deref() != Some(key.as_str())
-            {
-                *prompted_ui.borrow_mut() = Some(key);
-                let current_name = status
-                    .current
+            if let Some(key) = confirmation_key(status.mode, &status.state, Some(c)) {
+                let active_key = active_prompt_ui
+                    .borrow()
                     .as_ref()
-                    .map(|n| n.name.as_str())
-                    .unwrap_or("Unknown network");
-                let dialog = adw::AlertDialog::new(
-                    Some("Wi-Fi signal is degrading."),
-                    Some(&format!(
-                        "Current\n{} · {}\n\nBetter candidate\n{} · {}",
-                        current_name,
-                        status
-                            .current
-                            .as_ref()
-                            .map(signal_summary)
-                            .unwrap_or_else(|| "No signal".into()),
-                        c.name,
-                        signal_summary(c)
-                    )),
-                );
-                dialog.add_response("ignore", "Ignore");
-                dialog.add_response("switch", "Switch");
-                dialog.set_default_response(Some("switch"));
-                dialog.set_close_response("ignore");
-                let socket = socket_ui.clone();
-                dialog.choose(
-                    Some(&parent),
-                    None::<&adw::gio::Cancellable>,
-                    move |response| {
-                        let _ = send(
-                            &socket,
-                            IpcRequest::Confirm {
-                                switch: response == "switch",
-                            },
-                        );
-                    },
-                );
+                    .map(|prompt| prompt.key.clone());
+                if active_key
+                    .as_deref()
+                    .is_some_and(|active| active != key.as_str())
+                {
+                    close_active_prompt(&active_prompt_ui);
+                }
+                if prompted_ui.borrow().as_deref() != Some(key.as_str()) {
+                    *prompted_ui.borrow_mut() = Some(key.clone());
+                    let current_name = status
+                        .current
+                        .as_ref()
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("Unknown network");
+                    let dialog = adw::AlertDialog::new(
+                        Some("Wi-Fi signal is degrading."),
+                        Some(&format!(
+                            "Current\n{} · {}\n\nBetter candidate\n{} · {}",
+                            current_name,
+                            status
+                                .current
+                                .as_ref()
+                                .map(signal_summary)
+                                .unwrap_or_else(|| "No signal".into()),
+                            c.name,
+                            signal_summary(c)
+                        )),
+                    );
+                    dialog.add_response("ignore", "Ignore");
+                    dialog.add_response("switch", "Switch");
+                    dialog.set_default_response(Some("switch"));
+                    dialog.set_close_response("ignore");
+                    let socket = socket_ui.clone();
+                    let active_prompt = active_prompt_ui.clone();
+                    let closed_automatically = Rc::new(Cell::new(false));
+                    let callback_closed = closed_automatically.clone();
+                    let callback_key = key.clone();
+                    dialog.clone().choose(
+                        Some(&parent),
+                        None::<&adw::gio::Cancellable>,
+                        move |response| {
+                            if callback_closed.get() {
+                                return;
+                            }
+                            let is_active = active_prompt
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|prompt| prompt.key == callback_key);
+                            if is_active {
+                                active_prompt.borrow_mut().take();
+                            }
+                            let _ = send(
+                                &socket,
+                                IpcRequest::Confirm {
+                                    switch: response == "switch",
+                                },
+                            );
+                        },
+                    );
+                    *active_prompt_ui.borrow_mut() = Some(ActivePrompt {
+                        key,
+                        dialog,
+                        closed_automatically,
+                    });
+                }
             }
         } else {
             candidate_label.set_text("Candidate\nNone");
+        }
+        if confirmation_key(status.mode, &status.state, status.candidate.as_ref()).is_none() {
+            close_active_prompt(&active_prompt_ui);
             *prompted_ui.borrow_mut() = None;
         }
         syncing_ui.set(true);
@@ -308,6 +348,21 @@ fn build_window(app: &adw::Application) {
     window.present();
 }
 
+fn confirmation_key(mode: Mode, state: &str, candidate: Option<&NetworkStatus>) -> Option<String> {
+    if mode != Mode::Confirm || state != "Confirm" {
+        return None;
+    }
+    candidate.map(|candidate| format!("{}:{}", candidate.profile_uuid, candidate.name))
+}
+
+fn close_active_prompt(active_prompt: &Rc<RefCell<Option<ActivePrompt>>>) {
+    let prompt = active_prompt.borrow_mut().take();
+    if let Some(prompt) = prompt {
+        prompt.closed_automatically.set(true);
+        prompt.dialog.force_close();
+    }
+}
+
 fn signal_name(network: &NetworkStatus) -> &'static str {
     match network.signal.unwrap_or(0) {
         70..=100 => "Strong",
@@ -346,6 +401,34 @@ fn send(path: &PathBuf, request: IpcRequest) -> Option<IpcResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn candidate() -> NetworkStatus {
+        NetworkStatus {
+            profile_uuid: "lab".into(),
+            name: "Lab".into(),
+            signal: Some(80),
+            eligible: true,
+            available: true,
+        }
+    }
+
+    #[test]
+    fn confirmation_prompt_is_only_open_while_awaiting_confirmation() {
+        let candidate = candidate();
+        assert_eq!(
+            confirmation_key(Mode::Confirm, "Confirm", Some(&candidate)),
+            Some("lab:Lab".into())
+        );
+        assert_eq!(
+            confirmation_key(Mode::Confirm, "Candidate ready", Some(&candidate)),
+            None
+        );
+        assert_eq!(confirmation_key(Mode::Confirm, "Confirm", None), None);
+        assert_eq!(
+            confirmation_key(Mode::Automatic, "Confirm", Some(&candidate)),
+            None
+        );
+    }
 
     #[test]
     fn missing_runtime_directory_has_no_shared_socket_fallback() {

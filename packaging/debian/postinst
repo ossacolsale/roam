@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+[ "${1:-}" = configure ] || exit 0
+state=/run/roam-package-upgrade.users
+for runtime in /run/user/[0-9]*; do
+  [ -d "$runtime" ] && [ -S "$runtime/bus" ] || continue
+  uid=${runtime##*/}
+  case "$uid" in ''|*[!0-9]*) continue ;; esac
+  username=$(getent passwd "$uid" | cut -d: -f1) || continue
+  [ -n "$username" ] || continue
+  runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+    systemctl --user daemon-reload || true
+  if [ -r "$state" ] && grep -Fxq "$uid" "$state"; then
+    runuser -u "$username" -- env XDG_RUNTIME_DIR="$runtime" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+      systemctl --user start roam.service || true
+  fi
+done
+rm -f "$state"
+exit 0

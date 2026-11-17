@@ -41,31 +41,36 @@ your selected roaming policy through NetworkManager.
 
 ## Install
 
-**Available now: build from source.** No GitHub Releases or downloadable
-release artifacts have been published yet. Debian/Ubuntu packages, a
-Fedora-family RPM, and an Arch/AUR package are also not published. The
-repository contains draft Debian, RPM, and Arch packaging definitions; they
-have not been released through distro repositories or the AUR.
+**Available now: GitHub release artifacts or build from source.** Linux x86_64
+releases include a binary archive and a Debian/Ubuntu amd64 `.deb` package.
+The `.deb` is distributed through GitHub Releases, not through a distro
+repository. Fedora-family RPM and Arch/AUR packages are not published.
 
-The GitHub release workflow creates a prerelease with a Linux x86_64 archive
-and checksums from a matching version tag. No release has been published yet.
-To prepare one, update the workspace version in `Cargo.toml`, commit the
-release changes, then create and push the matching immutable tag (for example,
-`v0.1.0`):
+To install the Debian/Ubuntu package, download the `.deb` and install it with:
 
 ```sh
-git tag -a v0.1.0 -m "Roam v0.1.0"
-git push origin v0.1.0
+sudo apt install ./roam_*_amd64.deb
+```
+
+The GitHub release workflow creates a prerelease with the Linux x86_64 archive,
+Debian/Ubuntu package, and checksums from a matching version tag. To prepare a
+release, update the workspace version in `Cargo.toml`, commit the release
+changes, then create and push the matching immutable tag (for example,
+`v0.1.1`):
+
+```sh
+git tag -a v0.1.1 -m "Roam v0.1.1"
+git push origin v0.1.1
 ```
 
 Pushing the tag starts the release workflow. Alternatively, use
 **Actions → Linux release → Run workflow** and enter a tag that already exists
 on GitHub; a missing tag stops with an explanatory error. The workflow checks
-out that tag, runs formatting, lint, test,
-and release-build checks, packages and validates the archive, then creates or
-updates the GitHub prerelease. Rerun the same tag from the corrected default
-branch when the workflow needs a fix; the tag stays in place and artifacts
-are rebuilt from that tag's commit. The archive is not a distro package;
+out that tag, runs formatting, lint, test, and release-build checks, packages
+and validates the archive and `.deb`, then creates or updates the GitHub
+prerelease. Rerun the same tag from the corrected default branch when the
+workflow needs a fix; the tag stays in place and artifacts are rebuilt from
+that tag's commit. The archive is not a distro package;
 after extracting one, run `scripts/install-archive.sh` from the extracted
 directory to install or update it.
 
@@ -104,8 +109,8 @@ Package upgrades, `scripts/install-local.sh`, and the release archive installer
 stop Roam for logged-in users when it is active before replacing the binaries,
 then start it again afterward. If the service was already inactive, they leave
 it inactive. Package hooks cover Debian packages, RPM packages, and the Arch
-PKGBUILD. They operate only on active user service managers; users who are
-logged out do not have a running Roam process to restart.
+PKGBUILD. Debian packages operate only on active user service managers; users
+who are logged out do not have a running Roam process to restart.
 
 The first service start creates `~/.config/roam/config.toml` with Automatic
 mode, Medium responsiveness, and no eligible profiles. Open Roam and select the

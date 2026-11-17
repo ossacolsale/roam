@@ -91,12 +91,13 @@ jobs:
         with:
           name: roam-binaries-${{ needs.validate-target.outputs.tag }}
           path: target/release
-      - name: Assemble archive and checksums
+      - name: Assemble archive, Debian package, and checksums
         env:
           RELEASE_TAG: ${{ needs.validate-target.outputs.tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
+          deb_version="${version/-/~}"
           root="roam-${version}-linux-x86_64"
           mkdir -p "$root/bin" "$root/share/applications" "$root/share/systemd/user" "$root/share/icons/hicolor/scalable/apps" "$root/share/metainfo" "$root/scripts"
           install -m755 target/release/roamd target/release/roam-ui "$root/bin/"
@@ -107,12 +108,36 @@ jobs:
           install -m755 scripts/install-archive.sh scripts/install-artifacts.sh "$root/scripts/"
           install -m644 README.md SECURITY.md LICENSE "$root/"
           tar -czf "${root}.tar.gz" "$root"
-          sha256sum "${root}.tar.gz" > SHA256SUMS
+
+          deb_root="roam-${version}-debian-amd64"
+          mkdir -p "$deb_root/DEBIAN" \
+            "$deb_root/usr/bin" \
+            "$deb_root/usr/lib/systemd/user/default.target.wants" \
+            "$deb_root/usr/share/applications" \
+            "$deb_root/usr/share/metainfo" \
+            "$deb_root/usr/share/icons/hicolor/scalable/apps" \
+            "$deb_root/usr/share/doc/roam"
+          sed "s/@VERSION@/${deb_version}/" packaging/debian/control.in > "$deb_root/DEBIAN/control"
+          install -m755 packaging/debian/preinst packaging/debian/prerm packaging/debian/postinst packaging/debian/postrm "$deb_root/DEBIAN/"
+          install -m755 target/release/roamd target/release/roam-ui "$deb_root/usr/bin/"
+          install -m644 systemd/roam.service "$deb_root/usr/lib/systemd/user/"
+          ln -s ../roam.service "$deb_root/usr/lib/systemd/user/default.target.wants/roam.service"
+          install -m644 packaging/org.roam.WifiRoaming.desktop "$deb_root/usr/share/applications/"
+          install -m644 packaging/org.roam.WifiRoaming.metainfo.xml "$deb_root/usr/share/metainfo/"
+          install -m644 assets/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg "$deb_root/usr/share/icons/hicolor/scalable/apps/"
+          for size in 16 24 32 48 64 128 256 512; do
+            install -Dm644 "assets/icons/hicolor/${size}x${size}/apps/org.roam.WifiRoaming.png" \
+              "$deb_root/usr/share/icons/hicolor/${size}x${size}/apps/org.roam.WifiRoaming.png"
+          done
+          install -m644 README.md SECURITY.md LICENSE "$deb_root/usr/share/doc/roam/"
+          dpkg-deb --build --root-owner-group "$deb_root" "roam_${deb_version}_amd64.deb"
+          sha256sum "${root}.tar.gz" "roam_${deb_version}_amd64.deb" > SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
           name: roam-release-${{ needs.validate-target.outputs.tag }}
           path: |
             roam-*-linux-x86_64.tar.gz
+            roam_*_amd64.deb
             SHA256SUMS
           if-no-files-found: error
           retention-days: 1
@@ -125,10 +150,14 @@ jobs:
         with:
           name: roam-release-${{ needs.validate-target.outputs.tag }}
       - name: Validate archive contents, integrity, and checksums
+        env:
+          RELEASE_TAG: ${{ needs.validate-target.outputs.tag }}
         run: |
           set -euo pipefail
           archive=(roam-*-linux-x86_64.tar.gz)
           test "${#archive[@]}" -eq 1
+          deb=(roam_*_amd64.deb)
+          test "${#deb[@]}" -eq 1
           tar -tzf "${archive[0]}" > archive-files.txt
           gzip -t "${archive[0]}"
           sha256sum -c SHA256SUMS
@@ -186,6 +215,58 @@ jobs:
             echo 'truncated archive unexpectedly passed validation' >&2
             exit 1
           fi
+          version="${RELEASE_TAG#v}"
+          deb_version="${version/-/~}"
+          test "$(dpkg-deb -f "${deb[0]}" Package)" = roam
+          test "$(dpkg-deb -f "${deb[0]}" Version)" = "$deb_version"
+          test "$(dpkg-deb -f "${deb[0]}" Architecture)" = amd64
+          dpkg-deb --info "${deb[0]}" >/dev/null
+          dpkg-deb --contents "${deb[0]}" > deb-files.txt
+          dpkg-deb --extract "${deb[0]}" extracted-deb
+          dpkg-deb --control "${deb[0]}" extracted-control
+          for script in preinst prerm postinst postrm; do
+            test -x "extracted-control/$script"
+            sh -n "extracted-control/$script"
+          done
+          for path in \
+            usr/bin/roamd \
+            usr/bin/roam-ui \
+            usr/lib/systemd/user/roam.service \
+            usr/share/applications/org.roam.WifiRoaming.desktop \
+            usr/share/metainfo/org.roam.WifiRoaming.metainfo.xml \
+            usr/share/icons/hicolor/scalable/apps/org.roam.WifiRoaming.svg \
+            usr/share/doc/roam/LICENSE; do
+            test -f "extracted-deb/$path"
+          done
+          for size in 16 24 32 48 64 128 256 512; do
+            test -f "extracted-deb/usr/share/icons/hicolor/${size}x${size}/apps/org.roam.WifiRoaming.png"
+          done
+          test -L extracted-deb/usr/lib/systemd/user/default.target.wants/roam.service
+          test "$(readlink extracted-deb/usr/lib/systemd/user/default.target.wants/roam.service)" = ../roam.service
+          python3 - extracted-deb <<'PY'
+          import pathlib, sys
+
+          root = pathlib.Path(sys.argv[1])
+          for path in root.rglob("*"):
+              relative = path.relative_to(root)
+              if any(part.startswith(".") for part in relative.parts):
+                  raise SystemExit(f"unexpected hidden path in Debian package: {relative}")
+              if any(part in {".git", "target"} for part in relative.parts):
+                  raise SystemExit(f"local build content in Debian package: {relative}")
+              if path.suffix.lower() in {".pem", ".key", ".env"}:
+                  raise SystemExit(f"sensitive file in Debian package: {relative}")
+          PY
+          cp "${deb[0]}" corrupt.deb
+          printf 'broken' | dd of=corrupt.deb bs=1 seek=0 conv=notrunc status=none
+          if dpkg-deb --info corrupt.deb >/dev/null 2>&1; then
+            echo 'corrupt Debian package unexpectedly passed validation' >&2
+            exit 1
+          fi
+          head -c 32 "${deb[0]}" > truncated.deb
+          if dpkg-deb --info truncated.deb >/dev/null 2>&1; then
+            echo 'truncated Debian package unexpectedly passed validation' >&2
+            exit 1
+          fi
 
   publish:
     needs: [validate-target, validate-artifact]
@@ -208,6 +289,6 @@ jobs:
             gh release edit "$RELEASE_TAG" --title "$title" --prerelease
           else
             gh release create "$RELEASE_TAG" --verify-tag --title "$title" --prerelease \
-              --notes "Linux x86_64 source and binary archive. See the repository README for supported systems, installation, and known limitations."
+              --notes "Linux x86_64 binary archive and Debian/Ubuntu amd64 package. See the repository README for supported systems, installation, and known limitations."
           fi
-          gh release upload "$RELEASE_TAG" roam-*-linux-x86_64.tar.gz SHA256SUMS --clobber
+          gh release upload "$RELEASE_TAG" roam-*-linux-x86_64.tar.gz roam_*_amd64.deb SHA256SUMS --clobber

@@ -1,0 +1,10 @@
+Package: roam
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: Roam maintainers <ossacolsale@users.noreply.github.com>
+Depends: libadwaita-1-0, libgtk-4-1, network-manager, systemd, util-linux
+Description: Local Wi-Fi roaming assistant
+ Roam monitors Wi-Fi signal and can switch between selected saved
+ NetworkManager profiles when the current connection becomes weak or unstable.
